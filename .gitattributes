@@ -1,0 +1,4 @@
+# Everything here is LF, in the repository and on disk. Git for Windows defaults
+# to checking text out as CRLF, which would silently rewrite every file in the
+# working tree, so say so explicitly instead.
+* text=auto eol=lf

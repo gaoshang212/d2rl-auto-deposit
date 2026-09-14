@@ -1,0 +1,65 @@
+# Auto Deposit - what you pick up goes where it belongs, on its own.
+#
+# Two destinations: Reimagined's Gem Bag for gems, the advanced stash for
+# everything the game counts as stash material.
+#
+# Every key is named for the destination it belongs to, then the verb, then what
+# it acts on:
+#
+#     gem_bag_merge_gems      the bag, merging, gems
+#     gem_bag_merge_clusters  the bag, merging, clusters
+#     gem_bag_ignore          codes the bag must not take
+#     stash_deposit           the stash, depositing
+#     stash_ignore            codes the stash must not take
+#
+# D2RLoader writes this file out of the copy inside the plugin the first time the
+# plugin loads, and never rewrites it afterwards, so your edits are kept. It is
+# read once, at startup: restart D2R after changing anything here.
+#
+# The switches are the automatic paths - the ones that run as you pick something
+# up. 'deposit' typed in the D2RLoader console is a request made by hand, so it
+# does both jobs whatever this file says.
+
+[auto-deposit]
+
+# --- the Gem Bag ---------------------------------------------------------
+#
+# Merge each gem into the bag the moment you pick it up.
+gem_bag_merge_gems     = true
+
+# Merge each gem cluster into the bag when you pick it up.
+# A cluster is worth 20-30 gems - the mod's own recipe, not a guess - so this
+# fills the bag quickly. Turn it off to collect clusters and cube them yourself.
+gem_bag_merge_clusters = true
+
+# Item codes the bag must not take, separated by spaces or commas. Anything
+# after a '#' on the same line is a comment. Codes are the three-character ones
+# out of the mod's item tables, the same ones you would see in a trade window.
+#
+#   gem_bag_ignore = "gms gme"
+#
+# Empty means the bag takes every gem and cluster it is offered.
+gem_bag_ignore         = ""
+
+# --- the advanced stash --------------------------------------------------
+#
+# Hand each item you pick up to the game's own deposit call, if the game counts
+# it among advanced-stash materials. This is what banks gems, runes, materials
+# and the cube - everything the game itself would let you drop into those tabs.
+#
+# Gems are excluded from this automatically while the bag is switched on above,
+# so the two destinations can never fight over the same item, and the Gem Bag
+# itself is never deposited - it is where the gems are.
+stash_deposit          = true
+
+# Item codes the advanced stash must not take, separated by spaces or commas.
+# Empty means no exceptions: every material the game accepts goes in.
+#
+#   stash_ignore = "rvs rvl"
+#
+# That example is the two rejuvenation potions, rvs (small) and rvl (full). This
+# shipped as "rvs rvl" by default, inherited through two other plugins from a
+# reference implementation that never wrote down why - and both codes are
+# advanced-stash material as far as the game is concerned. So the exception was
+# dropped rather than carried on unexplained; state it here if you want it.
+stash_ignore           = ""

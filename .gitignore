@@ -1,0 +1,20 @@
+# CMake's build tree. It is regenerated from CMakeLists.txt, and its cache holds
+# the machine-specific deploy path. The SDK is cloned into build/_deps when
+# there is no local checkout.
+build/
+
+# A Plugin SDK checkout kept under the project, so a build here works offline.
+# It belongs to the SDK's own repository, not to this one.
+external/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Build products, in case one ends up outside build/
+*.dll
+*.exp
+*.lib
+*.obj
+*.pdb
