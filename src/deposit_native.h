@@ -19,11 +19,14 @@
 // What one call concluded. Faulted is the one to be suspicious of: it means a
 // native call raised an exception rather than returning, which is the outcome
 // the __try blocks exist to turn into a log line.
+//
+// Every member is the game's answer. This plugin's own reasons to leave an item
+// alone are not here, because they are not the game's to give: the run asks
+// StashIgnores before it asks anything below.
 enum class Verdict : int {
 	Faulted = 0,  // a native call raised, or there is no player to deposit for
 	Blocked,      // the game flags this item as one it will not move
 	NotMaterial,  // the game does not count this among advanced-stash materials
-	Ignored,      // a code this plugin's own lists leave alone
 	NoTarget,     // the player has no advanced-stash unit to deposit into
 	Deposited,    // StashDeposit was called
 };
@@ -36,12 +39,12 @@ auto VerdictName(Verdict verdict) noexcept -> const char*;
 //
 // StashItemOk is deliberately not asked here. It is asked in DepositNative, in
 // the same breath as the move, because the gap between reading and moving is
-// where a stale answer would come from and the call is not expensive.
+// where a stale answer would come from and the call is not expensive. The code
+// is different: it is what the item *is*, so it cannot go stale between the two.
 struct ItemFacts {
-	uint32_t id      = 0;
-	uint32_t code    = 0;
-	uint8_t  page    = 0;
-	bool     hasData = false;
+	uint32_t id   = 0;
+	uint32_t code = 0;
+	uint8_t  page = 0;
 };
 
 // The value ItemFacts::page reads as for the inventory grid. Where in the data
@@ -72,17 +75,19 @@ __declspec(noinline) auto InspectItem(void* item, ItemFacts& out) noexcept -> bo
 // anyway, everything else in the run will too.
 __declspec(noinline) auto StashIsOpen() noexcept -> bool;
 
-// The write half: this plugin's own list first, then the game's checks, then the
-// move.
+// The write half: the game's checks, then the move.
 //
-// The ignore list comes before the game is asked anything: a code the config
-// says to leave alone is not the game's business, and asking about it first
-// would put this plugin's policy behind the game's answer.
+// This plugin's own ignore list is not here. It is asked by the run, before this
+// is called, because it is the run's policy and not the game's answer - see the
+// note on Verdict. The order that matters is kept either way: a code the config
+// leaves alone is never offered to the game at all.
 //
 // The class id is asked for here, in the same breath as the move, rather than
 // read earlier and carried in: the gap between reading and moving is where a
-// stale answer would come from, and neither call is expensive.
-__declspec(noinline) auto DepositNative(void* item) noexcept -> Verdict;
+// stale answer would come from, and neither call is expensive. The player is the
+// opposite - it is the same for every item in a run, so it is resolved by the
+// walk and passed in.
+__declspec(noinline) auto DepositNative(void* player, void* item) noexcept -> Verdict;
 
 // Everything the player's item container holds, gathered up front - which is
 // more than the inventory. The belt, the equipped slots and the stash pages hang
@@ -101,6 +106,10 @@ __declspec(noinline) auto DepositNative(void* item) noexcept -> Verdict;
 constexpr size_t MaxSnapshot = 128;
 
 struct Snapshot {
+	// Whose container this is, resolved once by the walk that filled it in. The
+	// run needs the player for every item it goes on to move, and asking again
+	// per item would be the same answer fetched N times.
+	void*    player = nullptr;
 	void*    items[MaxSnapshot] {};
 	uint32_t ids[MaxSnapshot] {};
 	size_t   count = 0;

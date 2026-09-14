@@ -2,9 +2,10 @@
 
 #include "deposit_config.h"
 #include "deposit_codes.h"
+#include "deposit_common.h"
 
-#include <cstdio>
 #include <cstring>
+#include <iterator>
 
 namespace {
 
@@ -51,16 +52,6 @@ constexpr const char* StashIgnoreDefault = "";
 constexpr size_t MaxIgnoreCodes = 32;
 
 }  // namespace
-
-auto MatchWord(const char* text, const char* word) noexcept -> bool {
-	const size_t length = std::strlen(word);
-	if (std::strncmp(text, word, length) != 0) {
-		return false;
-	}
-
-	const char next = text[length];
-	return next == 0 || next == ' ' || next == '\t' || next == '\r' || next == '\n' || next == '#' || next == '"' || next == '\'' || next == ',';
-}
 
 namespace {
 
@@ -190,7 +181,7 @@ auto ParseCodeList(const char* begin, const char* end, uint32_t* out, size_t cap
 		if (length != 3) {
 			++result.bad;
 		} else if (count < capacity) {
-			out[count++] = PackCodeToken(tokenStart, length);
+			out[count++] = PackCodeToken(tokenStart);
 			++result.count;
 		} else {
 			++result.dropped;
@@ -207,9 +198,12 @@ size_t   g_gemBagIgnoreCount = 0;
 uint32_t g_stashIgnore[MaxIgnoreCodes] {};
 size_t   g_stashIgnoreCount  = 0;
 
-// The shipped default for stash_ignore, as a range ParseCodeList can take. It
-// has to be a separate object: a string literal is not a range.
-constexpr const char* StashIgnoreDefaultText = StashIgnoreDefault;
+// The shipped default for stash_ignore, applied whenever the file does not name
+// it - or cannot be read at all.
+auto ParseDefaultStashIgnore() noexcept -> CodeListParse {
+	const size_t length = std::strlen(StashIgnoreDefault);
+	return ParseCodeList(StashIgnoreDefault, StashIgnoreDefault + length, g_stashIgnore, MaxIgnoreCodes, g_stashIgnoreCount);
+}
 
 }  // namespace
 
@@ -226,9 +220,8 @@ auto LoadConfig(const D2RL::PluginContext* context) noexcept -> void {
 	char     text[ConfigMaxBytes] {};
 	uint32_t required = 0;
 	if (!context->ReadConfig(text, static_cast<uint32_t>(sizeof(text) - 1), &required)) {
-		context->LogWarn("AutoDeposit: could not read d2rloader/config/d2rl-auto-deposit.toml; the built-in defaults are in use (every switch on, both ignore lists empty).");
-		const size_t length = std::strlen(StashIgnoreDefaultText);
-		ParseCodeList(StashIgnoreDefaultText, StashIgnoreDefaultText + length, g_stashIgnore, MaxIgnoreCodes, g_stashIgnoreCount);
+		D2RL::LogWarnF(context, "AutoDeposit: could not read d2rloader/config/d2rl-auto-deposit.toml; the built-in defaults are in use (every switch on, both ignore lists empty).");
+		ParseDefaultStashIgnore();
 		return;
 	}
 
@@ -250,70 +243,50 @@ auto LoadConfig(const D2RL::PluginContext* context) noexcept -> void {
 	if (ConfigValue(text, "stash_ignore", begin, end)) {
 		stashParse = ParseCodeList(begin, end, g_stashIgnore, MaxIgnoreCodes, g_stashIgnoreCount);
 	} else {
-		const size_t length = std::strlen(StashIgnoreDefaultText);
-		stashParse = ParseCodeList(StashIgnoreDefaultText, StashIgnoreDefaultText + length, g_stashIgnore, MaxIgnoreCodes, g_stashIgnoreCount);
+		stashParse = ParseDefaultStashIgnore();
 	}
 
-	char message[320] {};
-	std::snprintf(message,
-	              sizeof(message),
-	              "AutoDeposit: config says gem_bag_merge_gems=%s, gem_bag_merge_clusters=%s, stash_deposit=%s, %u gem-bag ignore code(s), %u stash ignore code(s).",
-	              g_gemBagMergeGems ? "true" : "false",
-	              g_gemBagMergeClusters ? "true" : "false",
-	              g_stashDeposit ? "true" : "false",
-	              static_cast<unsigned>(g_gemBagIgnoreCount),
-	              static_cast<unsigned>(g_stashIgnoreCount));
-	context->LogInfo(message);
+	D2RL::LogInfoF(context,
+	               "AutoDeposit: config says gem_bag_merge_gems=%s, gem_bag_merge_clusters=%s, stash_deposit=%s, %u gem-bag ignore code(s), %u stash ignore code(s).",
+	               g_gemBagMergeGems ? "true" : "false",
+	               g_gemBagMergeClusters ? "true" : "false",
+	               g_stashDeposit ? "true" : "false",
+	               static_cast<unsigned>(g_gemBagIgnoreCount),
+	               static_cast<unsigned>(g_stashIgnoreCount));
 
 	// A list that says something other than what it means is the one failure a
 	// config reader must not pass over in silence.
 	if (gemParse.bad != 0 || gemParse.dropped != 0) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: gem_bag_ignore has %u entr(ies) that are not three-character codes and %u past the %u a list holds; those were not applied.",
-		              static_cast<unsigned>(gemParse.bad),
-		              static_cast<unsigned>(gemParse.dropped),
-		              static_cast<unsigned>(MaxIgnoreCodes));
-		context->LogWarn(message);
+		D2RL::LogWarnF(context,
+		               "AutoDeposit: gem_bag_ignore has %u entr(ies) that are not three-character codes and %u past the %u a list holds; those were not applied.",
+		               static_cast<unsigned>(gemParse.bad),
+		               static_cast<unsigned>(gemParse.dropped),
+		               static_cast<unsigned>(MaxIgnoreCodes));
 	}
 	if (stashParse.bad != 0 || stashParse.dropped != 0) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: stash_ignore has %u entr(ies) that are not three-character codes and %u past the %u a list holds; those were not applied.",
-		              static_cast<unsigned>(stashParse.bad),
-		              static_cast<unsigned>(stashParse.dropped),
-		              static_cast<unsigned>(MaxIgnoreCodes));
-		context->LogWarn(message);
+		D2RL::LogWarnF(context,
+		               "AutoDeposit: stash_ignore has %u entr(ies) that are not three-character codes and %u past the %u a list holds; those were not applied.",
+		               static_cast<unsigned>(stashParse.bad),
+		               static_cast<unsigned>(stashParse.dropped),
+		               static_cast<unsigned>(MaxIgnoreCodes));
 	}
+}
+
+auto AnyAutomaticWorkEnabled() noexcept -> bool {
+	return g_gemBagMergeGems || g_gemBagMergeClusters || g_stashDeposit;
 }
 
 auto IsGemCode(uint32_t code) noexcept -> bool {
-	for (const uint32_t gem : GemCodes) {
-		if (gem == code) {
-			return true;
-		}
-	}
-	return false;
+	return ListHasCode(GemCodes, std::size(GemCodes), code);
 }
 
 auto IsClassicGemCode(uint32_t code) noexcept -> bool {
-	for (const uint32_t gem : ClassicGemCodes) {
-		if (gem == code) {
-			return true;
-		}
-	}
-	return false;
+	return ListHasCode(ClassicGemCodes, std::size(ClassicGemCodes), code);
 }
 
 // True when the config tells the merge to leave this code where it is.
 auto GemBagIgnores(uint32_t code) noexcept -> bool {
-	const uint32_t masked = code & Code3Mask;
-	for (size_t index = 0; index < g_gemBagIgnoreCount; ++index) {
-		if (g_gemBagIgnore[index] == masked) {
-			return true;
-		}
-	}
-	return false;
+	return ListHasCode(g_gemBagIgnore, g_gemBagIgnoreCount, code & Code3Mask);
 }
 
 // True when the stash half must leave this code alone.
@@ -335,16 +308,12 @@ auto StashIgnores(uint32_t code) noexcept -> bool {
 		return true;
 	}
 
-	const uint32_t masked = code & Code3Mask;
-	for (size_t index = 0; index < g_stashIgnoreCount; ++index) {
-		if (g_stashIgnore[index] == masked) {
-			return true;
-		}
-	}
-	return false;
+	return ListHasCode(g_stashIgnore, g_stashIgnoreCount, code & Code3Mask);
 }
 
+// The packing, pinned: 'r' 0x72, 'v' 0x76, 's' 0x73, little-endian, fourth byte
+// dropped. Both the tables' codes and the config's tokens go through this, so a
+// change to either is caught here rather than by the two silently disagreeing.
 static_assert(Code3("rvs") == 0x00737672u);
-static_assert(PackCodeToken("gmm", 3) == Code3("gmm"));
-static_assert(PackCodeToken("gc", 2) == Code3("gc "));
+static_assert(PackCodeToken("rvs") == Code3("rvs"));
 

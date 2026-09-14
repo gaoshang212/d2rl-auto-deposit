@@ -100,7 +100,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 		return false;
 	}
 
-	if (!g_stashDeposit && !g_gemBagMergeGems && !g_gemBagMergeClusters) {
+	if (!AnyAutomaticWorkEnabled()) {
 		context->LogInfo("AutoDeposit: every switch is off in the config, so nothing is patched and what you pick up stays where it lands. The console command still works on request.");
 		return true;
 	}
@@ -108,14 +108,14 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	// The point of the plugin: both destinations, with no key at all. The
 	// signature is checked inside, so a game build this address does not belong
 	// to costs the feature, not the game.
+	//
+	// Started here so the pump is alive before the first pickup rather than only
+	// from it: a session load has nothing to post to yet, and the next pickup is
+	// what starts it then. StartPump asks for the thread service itself and
+	// reports whether it got it, so asking on its behalf would be the same
+	// question twice and the answer is not used either way.
 	if (InstallPickupHook(context)) {
-		D2RL::ThreadServiceV1 const* threads = ThreadServiceOf(context);
-		if (threads != nullptr) {
-			// Started here so the pump is alive before the first pickup rather
-			// than only from it: a session load has nothing to post to yet, and
-			// the next pickup is what starts it then.
-			StartPump(context);
-		}
+		StartPump(context);
 	}
 
 	return true;

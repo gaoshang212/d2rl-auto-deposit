@@ -9,7 +9,6 @@
 #include "deposit_stash.h"
 
 #include <atomic>
-#include <cstdio>
 #include <windows.h>
 
 namespace {
@@ -153,8 +152,7 @@ void PumpOnce(const D2RL::PluginContext* context) noexcept {
 	// an id dropped on a tick that could not act would be a pickup lost to a bad
 	// moment rather than to a decision.
 	const uint64_t now         = GetTickCount64();
-	uint32_t       batch[DepositWork::MaxBatch] {};
-	size_t         batchCount  = 0;
+	DepositWork    work {};
 	uint32_t       retire[MaxPendingPickups] {};
 	size_t         retireCount = 0;
 	uint32_t       never[4] {};
@@ -166,9 +164,9 @@ void PumpOnce(const D2RL::PluginContext* context) noexcept {
 			present = snapshot.ids[at] == pending[index].id;
 		}
 		if (present) {
-			if (batchCount < DepositWork::MaxBatch) {
-				batch[batchCount++]   = pending[index].id;
-				retire[retireCount++] = pending[index].id;
+			if (work.idCount < DepositWork::MaxBatch) {
+				work.ids[work.idCount++] = pending[index].id;
+				retire[retireCount++]    = pending[index].id;
 			}
 			// A full batch leaves the rest queued: they are still in the
 			// container, so the next tick takes them.
@@ -189,24 +187,19 @@ void PumpOnce(const D2RL::PluginContext* context) noexcept {
 	// the id named stopped existing before it could be seen. Saying so is the
 	// difference between a known miss and a silent one.
 	for (size_t index = 0; index < neverCount; ++index) {
-		char message[320] {};
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: the item picked up as id %u never appeared in the inventory, so it was left alone. The likely reason is that it merged into a stack that was already there - a merged pickup carries no unit of its own to deposit.",
-		              static_cast<unsigned>(never[index]));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: the item picked up as id %u never appeared in the inventory, so it was left alone. The likely reason is that it merged into a stack that was already there - a merged pickup carries no unit of its own to deposit.",
+		               static_cast<unsigned>(never[index]));
 	}
 
-	if (batchCount == 0) {
+	if (work.idCount == 0) {
 		return;
 	}
 
-	DepositWork work {};
-	for (size_t index = 0; index < batchCount; ++index) {
-		work.ids[index] = batch[index];
-	}
-	work.idCount = batchCount;
-	RunDeposit(context, work);
+	// The run is handed the walk above rather than making its own: it is the same
+	// thread on the same tick, and nothing between the two could have moved
+	// anything.
+	RunDeposit(context, work, &snapshot);
 }
 
 void __cdecl PickupPump(const D2RL::PluginContext* context, void* userData) noexcept {
@@ -361,7 +354,7 @@ auto InstallPickupHook(const D2RL::PluginContext* context) noexcept -> bool {
 	g_pickupHookLive = true;
 	// Give this run its full quota of "found nothing to do" lines; the count is
 	// there to keep a long session quiet, not to keep a test quiet.
-	g_gemBagNoopLogs       = 0;
+	g_gemBagNoopLogs   = 0;
 	g_stashNoopLogs    = 0;
 	g_stashExplainLogs = 0;
 	context->LogInfo("AutoDeposit: pickup hook installed. What you pick up now goes where it belongs on its own.");

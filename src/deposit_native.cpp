@@ -14,8 +14,7 @@
 
 #include "deposit_native.h"
 
-#include "deposit_codes.h"
-#include "deposit_config.h"
+#include "deposit_common.h"
 #include "deposit_native_signatures.h"
 
 #include <cstdio>
@@ -88,24 +87,12 @@ auto ClassifySignature(const uint8_t* expected, uint32_t size, const uint8_t* ac
 	return SignatureState::Detoured;
 }
 
-// Appends ", name" to a comma-separated list, keeping it terminated. The list is
-// how a build gets named in the log, so a full buffer truncates rather than
-// running off the end.
-auto AppendName(char* out, size_t capacity, size_t& used, const char* name) noexcept -> void {
-	const int written = std::snprintf(out + used, capacity - used, "%s%s", used != 0 ? ", " : "", name);
-	if (written > 0) {
-		const size_t added = static_cast<size_t>(written);
-		used = used + added < capacity ? used + added : capacity - 1;
-	}
-}
-
 }  // namespace
 
 auto VerdictName(Verdict verdict) noexcept -> const char* {
 	switch (verdict) {
 		case Verdict::Blocked:     return "blocked by the game";
 		case Verdict::NotMaterial: return "not advanced-stash material";
-		case Verdict::Ignored:     return "left alone by this plugin's config";
 		case Verdict::NoTarget:    return "no advanced-stash unit to deposit into";
 		case Verdict::Deposited:   return "deposited";
 		default:                   return "faulted";
@@ -124,8 +111,7 @@ __declspec(noinline) auto InspectItem(void* item, ItemFacts& out) noexcept -> bo
 
 		const auto* data = static_cast<const uint8_t*>(At<UnitFn>(ItemDataRva)(item));
 		if (data != nullptr) {
-			out.hasData = true;
-			out.page    = data[ItemDataPageOffset];
+			out.page = data[ItemDataPageOffset];
 		}
 		return true;
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -142,15 +128,10 @@ __declspec(noinline) auto StashIsOpen() noexcept -> bool {
 	}
 }
 
-__declspec(noinline) auto DepositNative(void* item) noexcept -> Verdict {
+__declspec(noinline) auto DepositNative(void* player, void* item) noexcept -> Verdict {
 	__try {
-		void* player = At<PlayerFn>(LocalPlayerRva)(At<IndexFn>(LocalIndexRva)());
 		if (player == nullptr) {
 			return Verdict::Faulted;
-		}
-		const uint32_t code = At<ItemCodeFn>(ItemCodeRva)(item);
-		if (StashIgnores(code)) {
-			return Verdict::Ignored;
 		}
 		if (At<UnitIntFn>(ItemBlockedRva)(item) != 0) {
 			return Verdict::Blocked;
@@ -191,6 +172,7 @@ __declspec(noinline) auto CollectInventory(Snapshot& out) noexcept -> bool {
 		if (inventory == nullptr) {
 			return false;
 		}
+		out.player = player;
 
 		void* item = At<UnitFn>(FirstItemRva)(inventory);
 		while (item != nullptr && out.count < MaxSnapshot) {
@@ -273,7 +255,7 @@ auto CheckNative(const D2RL::PluginContext* context, uint64_t exeBase) noexcept 
 			// business, but a plugin that quietly stopped checking would be worse
 			// than one that never checked.
 			++detoured;
-			AppendName(hooked, sizeof(hooked), hookedUsed, signature.name);
+			AppendList(hooked, sizeof(hooked), hookedUsed, ", ", signature.name);
 			continue;
 		}
 
@@ -288,48 +270,38 @@ auto CheckNative(const D2RL::PluginContext* context, uint64_t exeBase) noexcept 
 			std::snprintf(found, sizeof(found), "(the address could not be read at all)");
 		}
 
-		char detail[384] {};
-		std::snprintf(detail,
-		              sizeof(detail),
-		              "AutoDeposit: signature %s (RVA 0x%llX) does not match. Expected %s , found %s .",
-		              signature.name,
-		              static_cast<unsigned long long>(signature.rva),
-		              expected,
-		              found);
-		context->LogError(detail);
+		D2RL::LogErrorF(context,
+		                "AutoDeposit: signature %s (RVA 0x%llX) does not match. Expected %s , found %s .",
+		                signature.name,
+		                static_cast<unsigned long long>(signature.rva),
+		                expected,
+		                found);
 
-		AppendName(g_nativeMissing, sizeof(g_nativeMissing), used, signature.name);
+		AppendList(g_nativeMissing, sizeof(g_nativeMissing), used, ", ", signature.name);
 	}
 
 	g_nativeReady = missing == 0;
 
-	char message[512] {};
 	if (g_nativeReady) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: all %u native signatures match this build (exeBase=0x%llX).",
-		              static_cast<unsigned>(NativeTableCount),
-		              static_cast<unsigned long long>(exeBase));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: all %u native signatures match this build (exeBase=0x%llX).",
+		               static_cast<unsigned>(NativeTableCount),
+		               static_cast<unsigned long long>(exeBase));
 
 		if (detoured != 0) {
-			std::snprintf(message,
-			              sizeof(message),
-			              "AutoDeposit: %u of them are hooked at their entry by another plugin, so their first five bytes are a jump: %s. The bytes underneath are the ones this table expects and are what the check compared, so nothing is switched off - this plugin only calls these addresses, it never patches them, and a neighbour's hook in front of one does not change that.",
-			              static_cast<unsigned>(detoured),
-			              hooked);
-			context->LogInfo(message);
+			D2RL::LogInfoF(context,
+			               "AutoDeposit: %u of them are hooked at their entry by another plugin, so their first five bytes are a jump: %s. The bytes underneath are the ones this table expects and are what the check compared, so nothing is switched off - this plugin only calls these addresses, it never patches them, and a neighbour's hook in front of one does not change that.",
+			               static_cast<unsigned>(detoured),
+			               hooked);
 		}
 		return;
 	}
 
-	std::snprintf(message,
-	              sizeof(message),
-	              "AutoDeposit: %u of %u native signatures do NOT match this build: %s. The stash half is switched off - nothing will be offered to the advanced stash. The gem bag half needs none of these and still works. The lines above print what is actually at each failing address, which is what a corrected table is written from.",
-	              static_cast<unsigned>(missing),
-	              static_cast<unsigned>(NativeTableCount),
-	              g_nativeMissing);
-	context->LogError(message);
+	D2RL::LogErrorF(context,
+	                "AutoDeposit: %u of %u native signatures do NOT match this build: %s. The stash half is switched off - nothing will be offered to the advanced stash. The gem bag half needs none of these and still works. The lines above print what is actually at each failing address, which is what a corrected table is written from.",
+	                static_cast<unsigned>(missing),
+	                static_cast<unsigned>(NativeTableCount),
+	                g_nativeMissing);
 }
 
 auto NativeReady() noexcept -> bool {
@@ -340,11 +312,8 @@ auto NativeUsable(const D2RL::PluginContext* context) noexcept -> bool {
 	if (g_nativeReady) {
 		return true;
 	}
-	char message[384] {};
-	std::snprintf(message,
-	              sizeof(message),
-	              "AutoDeposit: the native signatures did not all match this build, so nothing was moved. Missing: %s",
-	              g_nativeMissing[0] != 0 ? g_nativeMissing : "(not checked yet)");
-	context->LogError(message);
+	D2RL::LogErrorF(context,
+	                "AutoDeposit: the native signatures did not all match this build, so nothing was moved. Missing: %s",
+	                g_nativeMissing[0] != 0 ? g_nativeMissing : "(not checked yet)");
 	return false;
 }

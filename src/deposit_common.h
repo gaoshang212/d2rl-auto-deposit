@@ -5,11 +5,37 @@
 
 #include <D2RLPlugin/api.h>
 
+#include <cstddef>
 #include <cstdint>
 
 // How many "the automatic path had nothing to do" lines reach the log before it
 // goes quiet.
 inline constexpr uint32_t AutoNoopLogLimit = 8;
+
+// Takes one from a budget, or reports that it is spent. The budgets are spent by
+// lines that are true but not news, and the rule is the same at every one of
+// them: say it while there is room, go quiet after that.
+//
+// The console's own lines do not come through here. A merge the player typed is
+// a deliberate act and answers every time, which is what the `!work.autoMerge ||`
+// in front of some of these call sites says.
+auto ClaimNoopLog(uint32_t& budget) noexcept -> bool;
+
+// Appends text to a comma-separated list being built in a fixed buffer, keeping
+// it terminated. A full buffer truncates: every one of these lists is on its way
+// into a log line, where a shortened list is worth more than a corrupted one.
+auto AppendList(char* out, size_t capacity, size_t& used, const char* separator, const char* text) noexcept -> void;
+
+// Whether text begins with word and then ends or breaks - the comparison the
+// config file and the console both need, so that a search term matches a word
+// rather than a prefix of a longer one.
+auto MatchWord(const char* text, const char* word) noexcept -> bool;
+
+// Whether a code appears in a list of them. The gem tables and the two ignore
+// lists are all this question, and the four answers want to keep agreeing about
+// it - so it is asked in one place. The caller masks the code when the list is
+// one of the config's, whose entries are three characters wide.
+auto ListHasCode(const uint32_t* codes, size_t count, uint32_t code) noexcept -> bool;
 
 // How many "the auto merge found nothing to do" lines have been written. The
 // merge the console command runs is a deliberate act, so it says so every time;

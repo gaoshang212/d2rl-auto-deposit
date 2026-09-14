@@ -37,20 +37,18 @@ constexpr uint16_t StackedGemStatId = 386;
 constexpr uintptr_t ItemUnitStatListOffset = 0x88;
 constexpr uintptr_t StatListRecordOffset   = 0xA8;
 constexpr size_t    StatRecordIdOffset     = 0x02;
-constexpr size_t    StatRecordValueOffset  = 0x04;
 
 // The record the walk lands on holds the gem counter, but the stride and the
 // record's own layout are the two things a future game build could change, so
 // a miss falls back to looking for stat 386 in the records that follow.
 constexpr size_t StatRecordScanBytes = 0x4000;
 
+// What the walk found: the counter, and whether the walk got anywhere. The
+// offsets it went through are its own business - nothing outside decides
+// anything on them, so nothing outside is told them.
 struct AmountRead {
-	uintptr_t unit     = 0;
-	uintptr_t statList = 0;
-	uintptr_t record   = 0;
-	uint16_t  statId   = 0;
-	uint16_t  amount   = 0;
-	bool      valid    = false;
+	uint16_t amount = 0;
+	bool     valid  = false;
 };
 
 // True when [address, address+size) is committed and readable. Scanning native
@@ -110,24 +108,20 @@ auto ReadAmountFromNative(void* nativeItem, AmountRead& out) noexcept -> bool {
 	if (unit == 0) {
 		return false;
 	}
-	out.unit = unit;
 
 	uintptr_t statList = 0;
 	if (!LoadPointer(unit + ItemUnitStatListOffset, statList)) {
 		return false;
 	}
-	out.statList = statList;
 
 	uintptr_t record = 0;
 	if (!LoadPointer(statList + StatListRecordOffset, record)) {
 		return false;
 	}
-	out.record = record;
 
 	uint16_t id    = 0;
 	uint16_t value = 0;
 	if (LoadStatEntry(record + StatRecordIdOffset, id, value) && id == StackedGemStatId) {
-		out.statId = id;
 		out.amount = value;
 		out.valid  = true;
 		return true;
@@ -148,26 +142,20 @@ auto ReadAmountFromNative(void* nativeItem, AmountRead& out) noexcept -> bool {
 			continue;
 		}
 
-		out.statId = candidate;
 		std::memcpy(&out.amount, bytes + offset + sizeof(uint16_t), sizeof(out.amount));
-		out.record = record + offset - StatRecordIdOffset;
-		out.valid  = true;
+		out.valid = true;
 		return true;
 	}
 
 	return false;
 }
 
-struct AmountProbe {
-	AmountRead read {};
-};
-
 void __cdecl AmountCallback(const D2RL::PluginContext* context, void* nativeItem, void* userData) noexcept {
 	(void)context;
 	if (userData == nullptr) {
 		return;
 	}
-	ReadAmountFromNative(nativeItem, static_cast<AmountProbe*>(userData)->read);
+	ReadAmountFromNative(nativeItem, *static_cast<AmountRead*>(userData));
 }
 
 // The console handler fills this in on its own thread and the game thread reads
@@ -179,19 +167,21 @@ struct BagWorkState {
 	// changes what is written to the log when nothing matched.
 	bool               autoMerge  = false;
 	uint32_t           pickupGuid = 0;
-	bool               scheduled  = false;
-	bool               ready      = false;
+	// A merge is queued and not finished. One flag rather than two: the only
+	// question ever asked of this state is whether the slot below is free to
+	// write into, and "queued" without "not finished" is not a state anything
+	// can be in.
+	bool               busy       = false;
 };
 
 BagWorkState g_bagWork {};
 
 auto ReadBagAmount(const D2RL::PluginContext* context, D2RL::ItemServiceV1 const* items, D2RL::ItemHandle bag, AmountRead& out) noexcept -> bool {
-	AmountProbe probe {};
-	if (items->editNativeItem(context, bag, AmountCallback, &probe) != D2RL::Items::Result::Success) {
+	out = AmountRead {};
+	if (items->editNativeItem(context, bag, AmountCallback, &out) != D2RL::Items::Result::Success) {
 		return false;
 	}
-	out = probe.read;
-	return probe.read.valid;
+	return out.valid;
 }
 
 // A Gem Cluster is worth 20 to 30 gems: that spread is Reimagined's own
@@ -253,6 +243,13 @@ struct MergeCollect {
 	uint32_t classicGems = 0;
 };
 
+// Whether this is the one item the pickup hook named. Asked in three places, so
+// it is asked in one: a wanted guid of zero means nothing in particular is being
+// asked for, and no item is "the wanted one" then.
+auto WasWanted(const MergeCollect& collect, const D2RL::Items::ItemInfo* item) noexcept -> bool {
+	return collect.wantedGuid != 0 && item->runtimeId == collect.wantedGuid;
+}
+
 // True when this item is the one the pickup hook is after, or when nothing in
 // particular is being asked for. Notes the runtime ids it turns down, so the log
 // can show what the sweep did see when the wanted one is not there.
@@ -265,6 +262,28 @@ auto WantsItem(MergeCollect& collect, const D2RL::Items::ItemInfo* item) noexcep
 	}
 	++collect.seenCount;
 	return false;
+}
+
+// One kind's arm of the walk: leave the item be, for whichever of the three
+// reasons applies, or take it. Gems and clusters differ only in which switch
+// and which list they answer to, so they share this rather than being written
+// out twice - and a fourth reason would only have to be added once.
+auto TakeLooseItem(MergeCollect& collect, const D2RL::Items::ItemInfo* item, bool allowed, D2RL::ItemHandle* taken, uint32_t& count) noexcept -> void {
+	if (!allowed || GemBagIgnores(item->code)) {
+		if (WasWanted(collect, item)) {
+			collect.skippedByConfig = true;
+		}
+		return;
+	}
+	if (!WantsItem(collect, item)) {
+		++collect.heldBack;
+		return;
+	}
+	if (count >= MaxMergeInputs) {
+		++collect.overflow;
+		return;
+	}
+	taken[count++] = item->handle;
 }
 
 auto CollectMergeItem(const D2RL::PluginContext*, const D2RL::Items::ItemInfo* item, void* userData) noexcept -> D2RL::Inventory::IterationAction {
@@ -283,47 +302,19 @@ auto CollectMergeItem(const D2RL::PluginContext*, const D2RL::Items::ItemInfo* i
 	}
 
 	if (item->code == GemClusterCode) {
-		if (!collect->takeClusters || GemBagIgnores(item->code)) {
-			if (collect->wantedGuid != 0 && item->runtimeId == collect->wantedGuid) {
-				collect->skippedByConfig = true;
-			}
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		if (!WantsItem(*collect, item)) {
-			++collect->heldBack;
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		if (collect->clusterCount >= MaxMergeInputs) {
-			++collect->overflow;
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		collect->clusters[collect->clusterCount++] = item->handle;
+		TakeLooseItem(*collect, item, collect->takeClusters, collect->clusters, collect->clusterCount);
 		return D2RL::Inventory::IterationAction::Continue;
 	}
 
 	if (IsGemCode(item->code)) {
-		if (!collect->takeGems || GemBagIgnores(item->code)) {
-			if (collect->wantedGuid != 0 && item->runtimeId == collect->wantedGuid) {
-				collect->skippedByConfig = true;
-			}
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		if (!WantsItem(*collect, item)) {
-			++collect->heldBack;
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		if (collect->gemCount >= MaxMergeInputs) {
-			++collect->overflow;
-			return D2RL::Inventory::IterationAction::Continue;
-		}
-		collect->gems[collect->gemCount++] = item->handle;
+		TakeLooseItem(*collect, item, collect->takeGems, collect->gems, collect->gemCount);
 	} else if (IsClassicGemCode(item->code)) {
 		// Counted only when it is an item this run is about. On a console sweep
 		// that is every classic gem in the inventory, which is the honest answer
 		// to "how many did you walk past"; on a pickup it is one or none, because
 		// the other thirty already in the inventory are not what just arrived and
 		// reporting them would read as though the merge had cleared them out.
-		if (collect->wantedGuid == 0 || item->runtimeId == collect->wantedGuid) {
+		if (collect->wantedGuid == 0 || WasWanted(*collect, item)) {
 			++collect->classicGems;
 		}
 	}
@@ -391,21 +382,19 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 		return;
 	}
 
-	char message[320] {};
-
+	// The budget is the automatic path's: a run the player asked for by hand is
+	// always worth a line, and it does not draw on a quota it would be spending on
+	// a player who is right there watching.
 	if (collect.bagsSeen == 0) {
-		if (!work.autoMerge || g_gemBagNoopLogs < AutoNoopLogLimit) {
-			++g_gemBagNoopLogs;
+		if (!work.autoMerge || ClaimNoopLog(g_gemBagNoopLogs)) {
 			context->LogError("AutoDeposit: no Gem Bag in the inventory; nothing to merge into.");
 		}
 		return;
 	}
 	if (collect.bagsSeen > 1) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: %u Gem Bags in the inventory. The merge cannot tell which one you mean, so it did nothing - keep one and drop the rest.",
-		              static_cast<unsigned>(collect.bagsSeen));
-		context->LogError(message);
+		D2RL::LogErrorF(context,
+		                "AutoDeposit: %u Gem Bags in the inventory. The merge cannot tell which one you mean, so it did nothing - keep one and drop the rest.",
+		                static_cast<unsigned>(collect.bagsSeen));
 		return;
 	}
 	if (collect.gemCount == 0 && collect.clusterCount == 0) {
@@ -417,8 +406,7 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 		// sitting in the inventory exactly where it should be, and reporting it as
 		// nowhere in the inventory would send the player looking for a bug.
 		if (collect.skippedByConfig) {
-			if (g_gemBagNoopLogs < AutoNoopLogLimit) {
-				++g_gemBagNoopLogs;
+			if (ClaimNoopLog(g_gemBagNoopLogs)) {
 				context->LogInfo("AutoDeposit: the item you picked up is one the config tells this plugin to leave alone, so it stays in the inventory where it landed.");
 			}
 			return;
@@ -427,28 +415,19 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 		// is not a gem, so it stays quiet after the first few - but not silent,
 		// because "the item I picked up is not here" is also what a gem would say
 		// if it never reached the inventory at all.
-		if (g_gemBagNoopLogs < AutoNoopLogLimit) {
-			++g_gemBagNoopLogs;
+		if (ClaimNoopLog(g_gemBagNoopLogs)) {
 			char   ids[64] {};
-			size_t at = 0;
+			size_t used = 0;
 			for (uint32_t index = 0; index < collect.seenCount && index < 4; ++index) {
-				const int written = std::snprintf(ids + at,
-				                                  sizeof(ids) - at,
-				                                  "%s%u",
-				                                  index == 0 ? "" : ",",
-				                                  static_cast<unsigned>(collect.seenGuids[index]));
-				if (written <= 0 || static_cast<size_t>(written) >= sizeof(ids) - at) {
-					break;
-				}
-				at += static_cast<size_t>(written);
+				char one[16] {};
+				std::snprintf(one, sizeof(one), "%u", static_cast<unsigned>(collect.seenGuids[index]));
+				AppendList(ids, sizeof(ids), used, ",", one);
 			}
-			std::snprintf(message,
-			              sizeof(message),
-			              "AutoDeposit: auto merge: the picked-up item (guid %u) is not a loose gem or cluster in the inventory. %u loose one(s) were left alone; their ids are [%s].",
-			              static_cast<unsigned>(work.pickupGuid),
-			              static_cast<unsigned>(collect.heldBack),
-			              ids);
-			context->LogInfo(message);
+			D2RL::LogInfoF(context,
+			               "AutoDeposit: auto merge: the picked-up item (guid %u) is not a loose gem or cluster in the inventory. %u loose one(s) were left alone; their ids are [%s].",
+			               static_cast<unsigned>(work.pickupGuid),
+			               static_cast<unsigned>(collect.heldBack),
+			               ids);
 		}
 		return;
 	}
@@ -461,10 +440,10 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 
 	const uint32_t room = read.amount < StackedGemMaxValue ? StackedGemMaxValue - read.amount : 0;
 	if (room == 0) {
-		if (!work.autoMerge || g_gemBagNoopLogs < AutoNoopLogLimit) {
-			++g_gemBagNoopLogs;
-			std::snprintf(message, sizeof(message), "AutoDeposit: the bag already holds %u gems, its maximum; nothing was merged.", static_cast<unsigned>(read.amount));
-			context->LogInfo(message);
+		if (!work.autoMerge || ClaimNoopLog(g_gemBagNoopLogs)) {
+			D2RL::LogInfoF(context,
+			               "AutoDeposit: the bag already holds %u gems, its maximum; nothing was merged.",
+			               static_cast<unsigned>(read.amount));
 		}
 		return;
 	}
@@ -515,13 +494,11 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 	}
 
 	if (inputCount <= 1) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: only %u gems of room left, too little for a cluster (%u-%u) and there are no loose gems. Nothing was merged.",
-		              static_cast<unsigned>(room),
-		              static_cast<unsigned>(GemClusterValueMin),
-		              static_cast<unsigned>(GemClusterValueMax));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: only %u gems of room left, too little for a cluster (%u-%u) and there are no loose gems. Nothing was merged.",
+		               static_cast<unsigned>(room),
+		               static_cast<unsigned>(GemClusterValueMin),
+		               static_cast<unsigned>(GemClusterValueMax));
 		return;
 	}
 
@@ -593,13 +570,11 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 		outputBag.destination.y           = 0;
 		status                            = items->executeTransaction(context, &exchange, &result);
 		if (status == D2RL::Items::Result::Success) {
-			std::snprintf(message,
-			              sizeof(message),
-			              "AutoDeposit: the bag's own cell (%u,%u) was refused (code %u), so the new bag went to the first free cell instead. The gems were merged either way.",
-			              static_cast<unsigned>(bagX),
-			              static_cast<unsigned>(bagY),
-			              static_cast<unsigned>(refused));
-			context->LogWarn(message);
+			D2RL::LogWarnF(context,
+			               "AutoDeposit: the bag's own cell (%u,%u) was refused (code %u), so the new bag went to the first free cell instead. The gems were merged either way.",
+			               static_cast<unsigned>(bagX),
+			               static_cast<unsigned>(bagY),
+			               static_cast<unsigned>(refused));
 		}
 	}
 
@@ -610,19 +585,17 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 
 	AmountRead verify {};
 	const bool readBack = ReadBagAmount(context, items, merged, verify);
-	std::snprintf(message,
-	              sizeof(message),
-	              "AutoDeposit: %smerged %u gem(s) and %u cluster(s) for +%u: %u -> %u gems. New bag 0x%llX reads back %s%u.",
-	              work.autoMerge ? "auto " : "",
-	              static_cast<unsigned>(tookGems),
-	              static_cast<unsigned>(tookClusters),
-	              static_cast<unsigned>(gained),
-	              static_cast<unsigned>(read.amount),
-	              static_cast<unsigned>(newTotal),
-	              static_cast<unsigned long long>(merged),
-	              readBack ? "" : "FAILED - ",
-	              readBack ? static_cast<unsigned>(verify.amount) : 0U);
-	context->LogInfo(message);
+	D2RL::LogInfoF(context,
+	               "AutoDeposit: %smerged %u gem(s) and %u cluster(s) for +%u: %u -> %u gems. New bag 0x%llX reads back %s%u.",
+	               work.autoMerge ? "auto " : "",
+	               static_cast<unsigned>(tookGems),
+	               static_cast<unsigned>(tookClusters),
+	               static_cast<unsigned>(gained),
+	               static_cast<unsigned>(read.amount),
+	               static_cast<unsigned>(newTotal),
+	               static_cast<unsigned long long>(merged),
+	               readBack ? "" : "FAILED - ",
+	               readBack ? static_cast<unsigned>(verify.amount) : 0U);
 
 	if (readBack && verify.amount != newTotal) {
 		context->LogError("AutoDeposit: the new bag does not read back the amount it was built with.");
@@ -631,29 +604,23 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 	// held back there. The pickup takes one item and walks past the rest, so say
 	// so - that count is the difference the player actually feels.
 	if (work.autoMerge && collect.heldBack > 0) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: %u other loose gem(s) or cluster(s) were left where they are; only the item you picked up was merged.",
-		              static_cast<unsigned>(collect.heldBack));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: %u other loose gem(s) or cluster(s) were left where they are; only the item you picked up was merged.",
+		               static_cast<unsigned>(collect.heldBack));
 	}
 	if (collect.classicGems > 0) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: left %u classic gem(s) where they are. They are worth one credit each like any other gem, but the Grabber only hands back the plain gem, so merging a perfect one would cost you its quality.",
-		              static_cast<unsigned>(collect.classicGems));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: left %u classic gem(s) where they are. They are worth one credit each like any other gem, but the Grabber only hands back the plain gem, so merging a perfect one would cost you its quality.",
+		               static_cast<unsigned>(collect.classicGems));
 	}
 	if (leftOver > 0 || collect.overflow > 0) {
-		std::snprintf(message,
-		              sizeof(message),
-		              "AutoDeposit: %u item(s) were left in the inventory: %u did not fit in the room left or in the %u inputs one exchange takes, %u were past the %u of one kind a sweep holds. Run the merge again for the rest.",
-		              static_cast<unsigned>(leftOver + collect.overflow),
-		              static_cast<unsigned>(leftOver),
-		              static_cast<unsigned>(MaxMergeInputs),
-		              static_cast<unsigned>(collect.overflow),
-		              static_cast<unsigned>(MaxMergeInputs));
-		context->LogInfo(message);
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: %u item(s) were left in the inventory: %u did not fit in the room left or in the %u inputs one exchange takes, %u were past the %u of one kind a sweep holds. Run the merge again for the rest.",
+		               static_cast<unsigned>(leftOver + collect.overflow),
+		               static_cast<unsigned>(leftOver),
+		               static_cast<unsigned>(MaxMergeInputs),
+		               static_cast<unsigned>(collect.overflow),
+		               static_cast<unsigned>(MaxMergeInputs));
 	}
 }
 
@@ -669,7 +636,7 @@ void __cdecl GameThreadBagWork(const D2RL::PluginContext* context, void* userDat
 	const BagWorkState work = *state;
 	RunMerge(context, work);
 
-	state->ready = true;
+	state->busy = false;
 }
 
 }  // namespace
@@ -688,7 +655,15 @@ auto ScheduleMerge(const D2RL::PluginContext* context, bool autoMerge, uint32_t 
 
 	// One merge at a time: the slot the game thread reads from is the one this
 	// would overwrite.
-	if (g_bagWork.scheduled && !g_bagWork.ready) {
+	if (g_bagWork.busy) {
+		return false;
+	}
+
+	// The shared helper, rather than a second query written out here: it also
+	// checks the service is big enough for the fields this plugin uses, which a
+	// hand-rolled query has to remember to do and this one did not.
+	const D2RL::ThreadServiceV1* threads = ThreadServiceOf(context);
+	if (threads == nullptr) {
 		return false;
 	}
 
@@ -703,17 +678,11 @@ auto ScheduleMerge(const D2RL::PluginContext* context, bool autoMerge, uint32_t 
 		return false;
 	}
 
-	const D2RL::ThreadServiceV1* threads = nullptr;
-	if (context->QueryService(D2RL::ServiceId::Thread, D2RL::ThreadServiceV1Version, &threads) != D2RL::ServiceQueryResult::Success
-	    || threads == nullptr) {
-		return false;
-	}
-
 	g_bagWork            = BagWorkState {};
 	g_bagWork.player     = player;
 	g_bagWork.autoMerge  = autoMerge;
 	g_bagWork.pickupGuid = pickupGuid;
-	g_bagWork.scheduled  = true;
+	g_bagWork.busy       = true;
 
 	if (threads->runOnGameThread(context, GameThreadBagWork, &g_bagWork) != D2RL::Threads::Result::Success) {
 		g_bagWork = BagWorkState {};

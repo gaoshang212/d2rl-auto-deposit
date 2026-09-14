@@ -19,13 +19,12 @@ extern bool g_gemBagMergeGems;
 extern bool g_gemBagMergeClusters;
 extern bool g_stashDeposit;
 
-// True when text starts with this word and the word ends there: "on" must not
-// match "only", and a trailing comment is fine after it. A quote ends a word
-// too, so a value that is wrapped in them reads the same as a bare one.
-//
-// The console command matches its own words with this: 'deposit bag' must not
-// match a word that merely starts with "bag".
-auto MatchWord(const char* text, const char* word) noexcept -> bool;
+// True when every automatic path is switched off, which is the config saying
+// there is nothing for this plugin to do on its own. Asked once, at load: it is
+// what decides whether the pickup hook is worth installing at all, so the set of
+// switches it covers has to grow with the switches themselves rather than being
+// spelled out again at the call site.
+auto AnyAutomaticWorkEnabled() noexcept -> bool;
 
 // The routing, and the two halves' reasons to leave something alone.
 //

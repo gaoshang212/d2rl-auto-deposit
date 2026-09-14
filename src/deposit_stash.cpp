@@ -8,7 +8,6 @@
 #include "deposit_native.h"
 
 #include <atomic>
-#include <cstdio>
 
 namespace {
 
@@ -28,20 +27,12 @@ struct DepositTally {
 // a pickup names one id and every other item in the inventory is ruled out
 // without calling anything native about it.
 auto SelectedById(const DepositWork& work, uint32_t id) noexcept -> bool {
-	if (work.sweepAll) {
-		return true;
-	}
-	for (size_t index = 0; index < work.idCount; ++index) {
-		if (work.ids[index] == id) {
-			return true;
-		}
-	}
-	return false;
+	return work.sweepAll || ListHasCode(work.ids, work.idCount, id);
 }
 
 }  // namespace
 
-void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work) noexcept {
+void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work, const Snapshot* gathered) noexcept {
 	if (!NativeUsable(context)) {
 		return;
 	}
@@ -52,16 +43,16 @@ void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work) noe
 	// that the ids stay queued instead of being retired - this is the second
 	// look, because the panel is on the player's hands and not on our clock.
 	if (!work.sweepAll && StashIsOpen()) {
-		if (g_stashExplainLogs < AutoNoopLogLimit) {
-			++g_stashExplainLogs;
-			context->LogInfo("AutoDeposit: the shared stash is open, so nothing was deposited. What was picked up stays in the inventory and goes in by itself once the panel is closed; 'deposit' does it now.");
+		if (ClaimNoopLog(g_stashExplainLogs)) {
+			D2RL::LogInfo(context, "AutoDeposit: the shared stash is open, so nothing was deposited. What was picked up stays in the inventory and goes in by itself once the panel is closed; 'deposit' does it now.");
 		}
 		return;
 	}
 
-	Snapshot snapshot {};
-	if (!CollectInventory(snapshot)) {
-		context->LogError("AutoDeposit: could not read the inventory.");
+	Snapshot       own {};
+	const Snapshot& snapshot = gathered != nullptr ? *gathered : own;
+	if (gathered == nullptr && !CollectInventory(own)) {
+		D2RL::LogError(context, "AutoDeposit: could not read the inventory.");
 		return;
 	}
 
@@ -92,59 +83,54 @@ void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work) noe
 
 		++tally.seen;
 
-		const Verdict verdict = DepositNative(snapshot.items[index]);
-		char          message[384] {};
+		// This plugin's own reason to leave the item alone, decided before the
+		// game is asked anything about it. It comes first because it is the run's
+		// policy and not the game's answer, and because the code it tests is the
+		// one already read above - the native half never has to ask for it.
+		if (StashIgnores(facts.code)) {
+			++tally.ignored;
+			continue;
+		}
+
+		const Verdict verdict = DepositNative(snapshot.player, snapshot.items[index]);
 
 		switch (verdict) {
-			case Verdict::Deposited: {
+			case Verdict::Deposited:
 				++tally.deposited;
 				// StashDeposit returns void, so all this can honestly claim is
 				// that the call returned without faulting. The item cannot be
 				// read back here either: the call relocates the unit, and the
 				// container goes on listing it for a moment afterwards. The bag
 				// losing it and the tab's stack going up is the confirmation.
-				std::snprintf(message,
-				              sizeof(message),
-				              "AutoDeposit: %s (id %u) was handed to the game's deposit call, which returned. StashDeposit is void, so that is not an answer - the inventory losing it and the tab's stack going up is the confirmation.",
-				              CodeText(facts.code, codeText),
-				              static_cast<unsigned>(facts.id));
-				context->LogInfo(message);
+				D2RL::LogInfoF(context,
+				               "AutoDeposit: %s (id %u) was handed to the game's deposit call, which returned. StashDeposit is void, so that is not an answer - the inventory losing it and the tab's stack going up is the confirmation.",
+				               CodeText(facts.code, codeText),
+				               static_cast<unsigned>(facts.id));
 				break;
-			}
 			case Verdict::NoTarget:
 				++tally.noTarget;
-				std::snprintf(message,
-				              sizeof(message),
-				              "AutoDeposit: %s (id %u) stays put - the game gave no advanced-stash unit to deposit into. It was left where it is; nothing was destroyed.",
-				              CodeText(facts.code, codeText),
-				              static_cast<unsigned>(facts.id));
-				context->LogInfo(message);
+				D2RL::LogInfoF(context,
+				               "AutoDeposit: %s (id %u) stays put - the game gave no advanced-stash unit to deposit into. It was left where it is; nothing was destroyed.",
+				               CodeText(facts.code, codeText),
+				               static_cast<unsigned>(facts.id));
 				break;
 			case Verdict::Faulted:
 				++tally.faulted;
-				std::snprintf(message,
-				              sizeof(message),
-				              "AutoDeposit: %s (id %u) raised inside a native call and was left alone. That is a bug worth reporting.",
-				              CodeText(facts.code, codeText),
-				              static_cast<unsigned>(facts.id));
-				context->LogError(message);
-				break;
-			case Verdict::Ignored:
-				++tally.ignored;
+				D2RL::LogErrorF(context,
+				                "AutoDeposit: %s (id %u) raised inside a native call and was left alone. That is a bug worth reporting.",
+				                CodeText(facts.code, codeText),
+				                static_cast<unsigned>(facts.id));
 				break;
 			default:
 				// The game saying no: blocked, or not a material. A class id that
 				// could not be read never gets this far.
 				++tally.skipped;
-				if (g_stashNoopLogs < AutoNoopLogLimit) {
-					++g_stashNoopLogs;
-					std::snprintf(message,
-					              sizeof(message),
-					              "AutoDeposit: %s (id %u) stays put - %s.",
-					              CodeText(facts.code, codeText),
-					              static_cast<unsigned>(facts.id),
-					              VerdictName(verdict));
-					context->LogInfo(message);
+				if (ClaimNoopLog(g_stashNoopLogs)) {
+					D2RL::LogInfoF(context,
+					               "AutoDeposit: %s (id %u) stays put - %s.",
+					               CodeText(facts.code, codeText),
+					               static_cast<unsigned>(facts.id),
+					               VerdictName(verdict));
 				}
 				break;
 		}
@@ -156,25 +142,21 @@ void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work) noe
 	// is said rather than passed over, because a run that deposits nothing and
 	// logs nothing is indistinguishable from a run that never happened.
 	if (!work.sweepAll && tally.seen == 0) {
-		if (g_stashExplainLogs < AutoNoopLogLimit) {
-			++g_stashExplainLogs;
-			context->LogInfo("AutoDeposit: the item just picked up was not in the inventory by the time it was looked at, so there was nothing to offer. It may have gone somewhere else, or the pickup may not have put it in the inventory at all.");
+		if (ClaimNoopLog(g_stashExplainLogs)) {
+			D2RL::LogInfo(context, "AutoDeposit: the item just picked up was not in the inventory by the time it was looked at, so there was nothing to offer. It may have gone somewhere else, or the pickup may not have put it in the inventory at all.");
 		}
 		return;
 	}
 
-	char message[448] {};
-	std::snprintf(message,
-	              sizeof(message),
-	              "AutoDeposit: run done. %u item(s) on the inventory grid were looked at: %u deposited, %u ignored by config, %u skipped, %u with no stash to take them, %u faulted. %u more unit(s) in the same container are not grid items and were not looked at.",
-	              static_cast<unsigned>(tally.seen),
-	              static_cast<unsigned>(tally.deposited),
-	              static_cast<unsigned>(tally.ignored),
-	              static_cast<unsigned>(tally.skipped),
-	              static_cast<unsigned>(tally.noTarget),
-	              static_cast<unsigned>(tally.faulted),
-	              static_cast<unsigned>(tally.elsewhere));
-	context->LogInfo(message);
+	D2RL::LogInfoF(context,
+	               "AutoDeposit: run done. %u item(s) on the inventory grid were looked at: %u deposited, %u ignored by config, %u skipped, %u with no stash to take them, %u faulted. %u more unit(s) in the same container are not grid items and were not looked at.",
+	               static_cast<unsigned>(tally.seen),
+	               static_cast<unsigned>(tally.deposited),
+	               static_cast<unsigned>(tally.ignored),
+	               static_cast<unsigned>(tally.skipped),
+	               static_cast<unsigned>(tally.noTarget),
+	               static_cast<unsigned>(tally.faulted),
+	               static_cast<unsigned>(tally.elsewhere));
 }
 
 namespace {

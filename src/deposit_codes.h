@@ -8,27 +8,31 @@
 #include <cstddef>
 #include <cstdint>
 
-// The three bytes of a code packed so a constant-expression comparison can be
-// written the way a human reads it. The fourth byte is a space on every real
-// code, and masking it off is what lets 'rvs' match a 'rvs ' item.
-constexpr uint32_t Code3(const char (&text)[4]) noexcept {
-	return static_cast<uint32_t>(static_cast<uint8_t>(text[0]))
-	     | (static_cast<uint32_t>(static_cast<uint8_t>(text[1])) << 8)
-	     | (static_cast<uint32_t>(static_cast<uint8_t>(text[2])) << 16);
+// The three bytes of a code, packed little-endian: 'rvs' is 0x00737672.
+//
+// Three bytes are read and no more, so the caller is the one that has to know
+// there are three - and both of them do, because three characters is the only
+// token length either accepts.
+//
+// Three and not four. The fourth byte of a real item code is a space, and
+// dropping it is what lets 'rvs' match an item whose code is 'rvs ' - see
+// Code3Mask, which every comparison against an item's own code applies.
+constexpr auto PackCodeToken(const char* text) noexcept -> uint32_t {
+	uint32_t packed = 0;
+	for (size_t index = 0; index < 3; ++index) {
+		packed |= static_cast<uint32_t>(static_cast<unsigned char>(text[index])) << (index * 8);
+	}
+	return packed;
 }
 
 inline constexpr uint32_t Code3Mask = 0x00FFFFFFu;
 
-// One token of an ignore list, packed for the three-byte comparison above. A
-// short token is padded with a space, which is what the fourth byte of a real
-// item code is.
-constexpr auto PackCodeToken(const char* text, size_t length) noexcept -> uint32_t {
-	uint32_t packed = 0;
-	for (size_t index = 0; index < 3; ++index) {
-		const char byte = index < length ? text[index] : ' ';
-		packed |= static_cast<uint32_t>(static_cast<unsigned char>(byte)) << (index * 8);
-	}
-	return packed;
+// The same packing, for the places that write a code out as a literal so it can
+// be read the way a human reads it. Code3 stays the readable spelling of the
+// spec - "a three-byte code is 0x00737672" for 'rvs' - with the array bound
+// holding it to three characters plus the terminator.
+constexpr uint32_t Code3(const char (&text)[4]) noexcept {
+	return PackCodeToken(text);
 }
 
 // Reimagined item codes, padded to D2 item-table four-byte form.

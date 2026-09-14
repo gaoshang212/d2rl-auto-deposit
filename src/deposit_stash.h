@@ -14,6 +14,8 @@
 
 #include <D2RLPlugin/api.h>
 
+#include "deposit_native.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -36,7 +38,16 @@ struct DepositWork {
 // The automatic path stays out of the way while the shared stash panel is open -
 // see StashIsOpen - and a run that came from a pickup is the automatic path. The
 // console sweep sets sweepAll and is exempt, because the player asked.
-void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work) noexcept;
+//
+// `gathered` is the container, already read. The pump has to walk it before it
+// can decide which queued ids have arrived, so it hands its walk over rather
+// than have the run repeat it - same thread, same tick, nothing in between that
+// could change the answer. Null means "read it now", which is what the console
+// sweep does, since nothing has read it on its behalf.
+//
+// Either way the container is read before anything in it is moved, which is the
+// invariant the walk exists for.
+void RunDeposit(const D2RL::PluginContext* context, const DepositWork& work, const Snapshot* gathered = nullptr) noexcept;
 
 // Queues a sweep of the whole inventory grid. The console asks for this; the
 // pickup path never does, because a pickup that takes the whole inventory would
