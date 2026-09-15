@@ -28,24 +28,23 @@ namespace {
 constexpr size_t ConfigMaxBytes = 4096;
 
 // What the DLL ships as the defaults, and what is used if the file cannot be
-// read at all. Everything is on: an item you did not ask to be left alone goes
-// where it belongs.
+// read at all. Everything is on, and the only thing left alone is the pair of
+// rejuvenation potions named below.
 constexpr bool        GemBagMergeGemsDefault     = true;
 constexpr bool        GemBagMergeClustersDefault = true;
 constexpr bool        StashDepositDefault        = true;
-// The stash half leaves nothing alone out of the box: the list is empty.
+// The stash half leaves the two rejuvenation potions alone: 'rvs' is the small
+// one and 'rvl' the full one.
 //
-// It shipped as "rvs rvl", the two rejuvenation potions, carried across from
-// d2rl-auto-stash, which mirrored it from Paragon System 1.7.8, which took it
-// from a reference implementation neither of them names. The exclusion arrived
-// without its reason, and a fresh project reproducing an unexplained exception is
-// how a wrong default outlives everyone who could have questioned it. Both codes
-// are advanced-stash material - the game's own StashItemOk accepts them - so
-// nothing here says the game wants them left alone.
+// The game's own StashItemOk accepts both, so this is not the game asking for an
+// exception - it is the one exception shipped on purpose. A rejuv is drunk from
+// the belt or the inventory in the middle of a fight, and one banked the moment
+// it was picked up is one that is not there when it is wanted. Everything else
+// the game counts as stash material still goes in untouched.
 //
-// It is a preference, not a rule. Put the codes back, here or in the config file,
-// if you would rather they stayed in the inventory: "rvs rvl".
-constexpr const char* StashIgnoreDefault = "";
+// It is a preference, not a rule. Clear the list, here or in the config file, if
+// you would rather they were banked like everything else.
+constexpr const char* StashIgnoreDefault = "rvs rvl";
 
 // How many codes one ignore list holds. A list this long has never been seen;
 // the ceiling is here so a runaway file cannot walk off the end of an array.
@@ -220,7 +219,7 @@ auto LoadConfig(const D2RL::PluginContext* context) noexcept -> void {
 	char     text[ConfigMaxBytes] {};
 	uint32_t required = 0;
 	if (!context->ReadConfig(text, static_cast<uint32_t>(sizeof(text) - 1), &required)) {
-		D2RL::LogWarnF(context, "AutoDeposit: could not read d2rloader/config/d2rl-auto-deposit.toml; the built-in defaults are in use (every switch on, both ignore lists empty).");
+		D2RL::LogWarnF(context, "AutoDeposit: could not read d2rloader/config/d2rl-auto-deposit.toml; the built-in defaults are in use (every switch on, the stock ignore lists).");
 		ParseDefaultStashIgnore();
 		return;
 	}

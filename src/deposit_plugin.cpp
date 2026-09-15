@@ -53,7 +53,7 @@ constexpr D2RL::PluginInfo DepositPluginInfo {
 	.apiVersion  = D2RL_PLUGIN_API_VERSION,
 	.id          = "d2rl-auto-deposit",
 	.name        = "Auto Deposit",
-	.version     = "0.1.0",
+	.version     = "0.1.1",
 	.author      = "gaoshang212",
 	.description = "What you pick up goes where it belongs: gems into Reimagined's Gem Bag, everything the game counts as stash material into the advanced stash. Ignore lists in the config file.",
 	// NativeHooks is required for both halves. Items::editNativeItem is the only

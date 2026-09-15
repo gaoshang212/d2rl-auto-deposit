@@ -53,13 +53,15 @@ gem_bag_ignore         = ""
 stash_deposit          = true
 
 # Item codes the advanced stash must not take, separated by spaces or commas.
-# Empty means no exceptions: every material the game accepts goes in.
+# Anything after a '#' on the same line is a comment.
 #
-#   stash_ignore = "rvs rvl"
+# The two rejuvenation potions are named here: rvs (small) and rvl (full). The
+# game is happy to bank them, so this is not its rule - a rejuv is drunk from the
+# belt or the inventory in the middle of a fight, and one banked on pickup is not
+# there when it is wanted. Everything else the game counts as stash material
+# still goes in.
 #
-# That example is the two rejuvenation potions, rvs (small) and rvl (full). This
-# shipped as "rvs rvl" by default, inherited through two other plugins from a
-# reference implementation that never wrote down why - and both codes are
-# advanced-stash material as far as the game is concerned. So the exception was
-# dropped rather than carried on unexplained; state it here if you want it.
-stash_ignore           = ""
+# Empty the list to bank them like everything else:
+#
+#   stash_ignore = ""
+stash_ignore           = "rvs rvl"

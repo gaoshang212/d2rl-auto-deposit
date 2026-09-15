@@ -33,7 +33,7 @@ gem_bag_merge_clusters = true    # 捡起宝石簇时合入袋子
 gem_bag_ignore         = ""      # 袋子不许收的物品代码
 
 stash_deposit          = true    # 其它物品自动放入高级仓库
-stash_ignore           = ""      # 仓库不许收的物品代码
+stash_ignore           = "rvs rvl"   # 仓库不许收的物品代码
 ```
 
 每个键都是**目的地在前、动词居中、宾语在后** —— `gem_bag_merge_gems` 和 `stash_deposit` 不用看注释
@@ -46,9 +46,9 @@ stash_ignore           = ""      # 仓库不许收的物品代码
 stash_ignore = "rvs rvl"    # rvs 小紫,rvl 大紫,两种恢复药水
 ```
 
-`stash_ignore` 原本默认是 `"rvs rvl"`,两种恢复药水。这个排除是从 `d2rl-auto-stash` 抄来的,
-它又是从 Paragon System 1.7.8 抄的,而**原因哪里都没写** —— 并且游戏本身认为这两个都是高级仓库材料。
-一条没有理由的例外不该出现在新项目的默认值里,所以去掉了。想让它们留在背包就自己加回去。
+`stash_ignore` 默认是 `"rvs rvl"`,两种恢复药水 —— 这是插件默认唯一不碰的东西。游戏本身乐意收它们
+(它自己的仓库检查两个都接受),所以这是插件定的规矩,不是游戏的规矩:紫药是在战斗中从腰带或背包里喝的,
+捡起来就存进仓库,真要用的时候就不在手上了。想让它们也照常存进去,把列表清空即可。
 
 这个文件是插件第一次加载时 D2RLoader 写出来的,之后**再也不覆盖**,你改的内容不会因为更新插件而丢。
 **只在启动时读一次 —— 改完要重启 D2R。**
@@ -148,4 +148,4 @@ cmake/deploy_dll.cmake    复制那一步
 external/d2r-pluginsdk    SDK,如果你在这放了一份(不进仓库)
 ```
 
-版本 0.1.0 · 作者 gaoshang212
+版本 0.1.1 · 作者 gaoshang212

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(D2RLAutoDepositPlugin VERSION 0.1.0 LANGUAGES CXX RC)
+project(D2RLAutoDepositPlugin VERSION 0.1.1 LANGUAGES CXX RC)
 
 # Where the plugin SDK comes from, in order of preference:
 #

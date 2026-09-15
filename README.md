@@ -35,7 +35,7 @@ gem_bag_merge_clusters = true    # gem clusters into the bag on pickup
 gem_bag_ignore         = ""      # codes the bag must not take
 
 stash_deposit          = true    # everything else into the advanced stash
-stash_ignore           = ""      # codes the stash must not take
+stash_ignore           = "rvs rvl"   # codes the stash must not take
 ```
 
 Every key names its destination first, then the verb, then what it acts on - so `gem_bag_merge_gems`
@@ -50,10 +50,11 @@ trade window, with anything after a `#` treated as a comment.
 stash_ignore = "rvs rvl"    # rvs is the small rejuv potion, rvl the full one
 ```
 
-`stash_ignore` shipped as `"rvs rvl"`, the two rejuvenation potions. That exclusion was inherited
-from `d2rl-auto-stash`, which took it from Paragon System 1.7.8, which never recorded why - and the
-game counts both as advanced-stash material. An exception with no reason behind it doesn't belong in
-a fresh default, so it was dropped. Add it back if you would rather they stayed in the inventory.
+`stash_ignore` ships as `"rvs rvl"`, the two rejuvenation potions, and that is the only thing the
+plugin leaves alone out of the box. The game is happy to bank them - its own stash check accepts
+both - so this is the plugin's choice, not the game's rule: a rejuv is drunk from the belt or the
+inventory in the middle of a fight, and one banked the moment it was picked up is not there when it
+is wanted. Clear the list if you would rather they went in like everything else.
 
 D2RLoader writes this file the first time the plugin loads and never overwrites it afterwards, so
 your edits survive updates. **Read once, at startup - restart D2R after editing.**
@@ -171,4 +172,4 @@ cmake/deploy_dll.cmake    the copy step
 external/d2r-pluginsdk    the SDK, if you keep a checkout here (not committed)
 ```
 
-Version 0.1.0 · by gaoshang212
+Version 0.1.1 · by gaoshang212
