@@ -36,12 +36,24 @@ constexpr uint16_t StackedGemStatId = 386;
 
 constexpr uintptr_t ItemUnitStatListOffset = 0x88;
 constexpr uintptr_t StatListRecordOffset   = 0xA8;
-constexpr size_t    StatRecordIdOffset     = 0x02;
 
-// The record the walk lands on holds the gem counter, but the stride and the
-// record's own layout are the two things a future game build could change, so
-// a miss falls back to looking for stat 386 in the records that follow.
-constexpr size_t StatRecordScanBytes = 0x4000;
+// A record names its stat with a u16 at +0x04 and holds its value as a u32 at
+// +0x08, of which only the low half is in use: ItemStatCost 386 saves 16 bits.
+// Records are 0x30 bytes apart.
+//
+// Both offsets were two bytes earlier until 2026-09-14 - +0x02 for the id, +0x04
+// for the value - and on the loader this plugin runs on now that pair reads the
+// id as 0 and the value's two bytes as 0, which is a bag of 832 gems reported as
+// 0. What the merge then wrote is the bug this is written to make impossible: the
+// walk looks for the stat id and never for a value, so a record it cannot find is
+// a failed read, and a failed read merges nothing.
+constexpr size_t StatRecordIdOffset    = 0x04;
+constexpr size_t StatRecordValueOffset = 0x08;
+constexpr size_t StatRecordStride      = 0x30;
+
+// How far along the records the walk reads. The bag holds one stat and it is the
+// first record; this is room for a build that says otherwise, not a search.
+constexpr size_t StatRecordWalkBytes = 0x180;
 
 // What the walk found: the counter, and whether the walk got anywhere. The
 // offsets it went through are its own business - nothing outside decides
@@ -89,21 +101,20 @@ auto LoadPointer(uintptr_t address, uintptr_t& out) noexcept -> bool {
 	return out != 0;
 }
 
-// Reads the 16-bit amount that follows a 16-bit stat id at address, checking a
-// readable range first so a stale pointer cannot fault the game thread.
-auto LoadStatEntry(uintptr_t address, uint16_t& id, uint16_t& value) noexcept -> bool {
-	constexpr size_t entryBytes = sizeof(uint16_t) * 2;
-	if (!IsReadableRange(address, entryBytes)) {
+// One record's stat id and value, read as one step so a record that is only half
+// there cannot be acted on. The readable range is checked first: these are live
+// game pointers and a stale one must fail the read, not the process.
+auto LoadStatRecord(uintptr_t address, uint16_t& id, uint16_t& value) noexcept -> bool {
+	constexpr size_t recordBytes = StatRecordValueOffset + sizeof(uint16_t);
+	if (!IsReadableRange(address, recordBytes)) {
 		return false;
 	}
-	std::memcpy(&id, reinterpret_cast<const void*>(address), sizeof(uint16_t));
-	std::memcpy(&value, reinterpret_cast<const void*>(address + sizeof(uint16_t)), sizeof(uint16_t));
+	std::memcpy(&id, reinterpret_cast<const void*>(address + StatRecordIdOffset), sizeof(id));
+	std::memcpy(&value, reinterpret_cast<const void*>(address + StatRecordValueOffset), sizeof(value));
 	return true;
 }
 
 auto ReadAmountFromNative(void* nativeItem, AmountRead& out) noexcept -> bool {
-	out = AmountRead {};
-
 	const uintptr_t unit = reinterpret_cast<uintptr_t>(nativeItem);
 	if (unit == 0) {
 		return false;
@@ -119,42 +130,59 @@ auto ReadAmountFromNative(void* nativeItem, AmountRead& out) noexcept -> bool {
 		return false;
 	}
 
-	uint16_t id    = 0;
-	uint16_t value = 0;
-	if (LoadStatEntry(record + StatRecordIdOffset, id, value) && id == StackedGemStatId) {
-		out.amount = value;
-		out.valid  = true;
-		return true;
-	}
-
-	// Layout moved: sweep the records for the stat id instead. The amount sits
-	// in the two bytes after it either way, which is what makes stat 386
-	// self-identifying.
-	if (!IsReadableRange(record, StatRecordScanBytes)) {
-		return false;
-	}
-
-	const auto* bytes = reinterpret_cast<const uint8_t*>(record);
-	for (size_t offset = 0; offset + 4 <= StatRecordScanBytes; offset += 2) {
-		uint16_t candidate = 0;
-		std::memcpy(&candidate, bytes + offset, sizeof(candidate));
-		if (candidate != StackedGemStatId) {
+	// The first record that names stat 386 is the bag's counter. Only the id is
+	// looked for, so a record laid out differently from the offsets above reads
+	// as no record at all rather than as a confident zero - and a zero here is
+	// not a harmless answer: it is the number the new bag gets built with.
+	for (size_t offset = 0; offset + StatRecordValueOffset + sizeof(uint16_t) <= StatRecordWalkBytes; offset += StatRecordStride) {
+		uint16_t id    = 0;
+		uint16_t value = 0;
+		if (!LoadStatRecord(record + offset, id, value)) {
+			return false;
+		}
+		if (id != StackedGemStatId) {
 			continue;
 		}
 
-		std::memcpy(&out.amount, bytes + offset + sizeof(uint16_t), sizeof(out.amount));
-		out.valid = true;
+		out.amount = value;
+		out.valid  = true;
 		return true;
 	}
 
 	return false;
 }
 
-void __cdecl AmountCallback(const D2RL::PluginContext* context, void* nativeItem, void* userData) noexcept {
-	(void)context;
+// What the game says the bag is, for the log line the console's read-only check
+// leads with. Nothing in the merge path reads a field of this.
+void ReportBag(const D2RL::PluginContext* context,
+               D2RL::ItemServiceV1 const*  items,
+               D2RL::ItemHandle            bag,
+               uint32_t                    bagsSeen,
+               uint32_t                    gems,
+               uint32_t                    clusters) noexcept {
+	D2RL::Items::ItemInfo info { .structSize = D2RL::Items::ItemInfoSize };
+	if (items->getItemInfo(context, bag, &info) != D2RL::Items::Result::Success) {
+		D2RL::LogErrorF(context, "AutoDeposit: the Gem Bag handle 0x%llX has no item info.", static_cast<unsigned long long>(bag));
+		return;
+	}
+
+	D2RL::LogInfoF(context,
+	               "AutoDeposit: bag probe: runtime id %u at %d,%d, %u bag(s), %u loose gem(s), %u cluster(s).",
+	               static_cast<unsigned>(info.runtimeId),
+	               info.x,
+	               info.y,
+	               static_cast<unsigned>(bagsSeen),
+	               static_cast<unsigned>(gems),
+	               static_cast<unsigned>(clusters));
+}
+
+// The SDK hands the item over for the length of this call and no longer, so the
+// only thing that outlives it is what the read wrote into `out`.
+void __cdecl AmountCallback(const D2RL::PluginContext*, void* nativeItem, void* userData) noexcept {
 	if (userData == nullptr) {
 		return;
 	}
+
 	ReadAmountFromNative(nativeItem, *static_cast<AmountRead*>(userData));
 }
 
@@ -172,11 +200,21 @@ struct BagWorkState {
 	// write into, and "queued" without "not finished" is not a state anything
 	// can be in.
 	bool               busy       = false;
+	// 'deposit probe' rather than a merge: read the bag, report it, and stop
+	// before the transaction. The same read either way, so this is what shows a
+	// read that has gone wrong without a bag full of gems paying for it.
+	bool               probeOnly  = false;
 };
 
 BagWorkState g_bagWork {};
 
-auto ReadBagAmount(const D2RL::PluginContext* context, D2RL::ItemServiceV1 const* items, D2RL::ItemHandle bag, AmountRead& out) noexcept -> bool {
+// The one way the counter is read, for the merge and for 'deposit probe' alike.
+// The answer starts as "nothing read": a refused edit never calls the callback,
+// and an unread counter must not be left looking like a counter holding 0.
+auto ReadBagAmount(const D2RL::PluginContext* context,
+                   D2RL::ItemServiceV1 const*  items,
+                   D2RL::ItemHandle            bag,
+                   AmountRead&                 out) noexcept -> bool {
 	out = AmountRead {};
 	if (items->editNativeItem(context, bag, AmountCallback, &out) != D2RL::Items::Result::Success) {
 		return false;
@@ -382,6 +420,30 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 		return;
 	}
 
+	// The console's read-only check. It stops here, before the transaction and
+	// before anything is counted as a gem to merge, so it answers "what does the
+	// counter read" without a bag full of gems paying for the answer - and it
+	// reports the very read the merge builds the new bag on.
+	if (work.probeOnly) {
+		if (collect.bagsSeen == 0) {
+			context->LogInfo("AutoDeposit: bag probe: no Gem Bag in the inventory; there is no counter to read.");
+			return;
+		}
+
+		ReportBag(context, items, collect.bag, collect.bagsSeen, collect.gemCount, collect.clusterCount);
+
+		AmountRead probe {};
+		if (!ReadBagAmount(context, items, collect.bag, probe)) {
+			context->LogError("AutoDeposit: bag probe: the counter could not be read - no record naming stat 386 in the bag's stat list. A merge would refuse to touch the bag rather than build a new one on a number it does not have. The bag was not changed.");
+			return;
+		}
+
+		D2RL::LogInfoF(context,
+		               "AutoDeposit: bag probe: the counter reads %u. The bag was not changed.",
+		               static_cast<unsigned>(probe.amount));
+		return;
+	}
+
 	// The budget is the automatic path's: a run the player asked for by hand is
 	// always worth a line, and it does not draw on a quota it would be spending on
 	// a player who is right there watching.
@@ -434,7 +496,7 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 
 	AmountRead read {};
 	if (!ReadBagAmount(context, items, collect.bag, read)) {
-		context->LogError("AutoDeposit: could not read the bag's counter, so the merge did nothing.");
+		context->LogError("AutoDeposit: the Gem Bag's counter could not be read, so the merge did nothing. 'deposit probe' logs what the read walks; nothing was consumed.");
 		return;
 	}
 
@@ -597,8 +659,8 @@ void RunMerge(const D2RL::PluginContext* context, const BagWorkState& work) noex
 	               readBack ? "" : "FAILED - ",
 	               readBack ? static_cast<unsigned>(verify.amount) : 0U);
 
-	if (readBack && verify.amount != newTotal) {
-		context->LogError("AutoDeposit: the new bag does not read back the amount it was built with.");
+	if (!readBack || verify.amount != newTotal) {
+		context->LogError("AutoDeposit: the new bag does not read back the amount it was built with; the merge went through, so check the count the bag shows.");
 	}
 	// The console command sweeps everything loose, so nothing is ever
 	// held back there. The pickup takes one item and walks past the rest, so say
@@ -641,13 +703,49 @@ void __cdecl GameThreadBagWork(const D2RL::PluginContext* context, void* userDat
 
 }  // namespace
 
+// Queues the console's read-only check: it reports the bag and what the counter
+// in it reads, and stops before the transaction. It is the same read the merge
+// acts on, so a read that has gone wrong is told apart from a merge that has -
+// without a bag full of gems paying for the answer.
+auto ScheduleProbe(const D2RL::PluginContext* context) noexcept -> bool {
+	if (context == nullptr || g_bagWork.busy) {
+		return false;
+	}
+
+	const D2RL::ThreadServiceV1* threads = ThreadServiceOf(context);
+	if (threads == nullptr) {
+		return false;
+	}
+
+	const D2RL::InventoryServiceV1* inventory = nullptr;
+	if (context->QueryService(D2RL::ServiceId::Inventory, D2RL::InventoryServiceV1Version, &inventory) != D2RL::ServiceQueryResult::Success
+	    || inventory == nullptr) {
+		return false;
+	}
+
+	D2RL::PlayerHandle player = D2RL::InvalidPlayerHandle;
+	if (inventory->getLocalPlayer(context, &player) != D2RL::Inventory::Result::Success) {
+		return false;
+	}
+
+	g_bagWork            = BagWorkState {};
+	g_bagWork.player     = player;
+	g_bagWork.probeOnly  = true;
+	g_bagWork.busy       = true;
+
+	if (threads->runOnGameThread(context, GameThreadBagWork, &g_bagWork) != D2RL::Threads::Result::Success) {
+		g_bagWork = BagWorkState {};
+		return false;
+	}
+	return true;
+}
+
 // Queues a merge. The pickup hook and the console command both come through
 // here, so the one path is what the log describes either way.
 //
 // autoMerge marks the pickup's merge, which takes only the item named by
 // pickupGuid. The console command passes false and zero: it sweeps every loose
 // gem, because that is what asking for a merge means.
-
 auto ScheduleMerge(const D2RL::PluginContext* context, bool autoMerge, uint32_t pickupGuid) noexcept -> bool {
 	if (context == nullptr) {
 		return false;

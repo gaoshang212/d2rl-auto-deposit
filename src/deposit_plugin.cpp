@@ -53,7 +53,7 @@ constexpr D2RL::PluginInfo DepositPluginInfo {
 	.apiVersion  = D2RL_PLUGIN_API_VERSION,
 	.id          = "d2rl-auto-deposit",
 	.name        = "Auto Deposit",
-	.version     = "0.1.1",
+	.version     = "0.1.2",
 	.author      = "gaoshang212",
 	.description = "What you pick up goes where it belongs: gems into Reimagined's Gem Bag, everything the game counts as stash material into the advanced stash. Ignore lists in the config file.",
 	// NativeHooks is required for both halves. Items::editNativeItem is the only
@@ -95,7 +95,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 
 	if (!context->RegisterConsoleCommand("deposit",
 			DepositCommand,
-			"Auto Deposit: 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges loose gems into the Gem Bag. Both happen on their own as you pick things up.")) {
+			"Auto Deposit: 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges loose gems into the Gem Bag. Both happen on their own as you pick things up. 'deposit probe' reads the Gem Bag's counter and logs it, changing nothing.")) {
 		context->LogError("AutoDeposit: failed to register the 'deposit' console command.");
 		return false;
 	}

@@ -34,6 +34,17 @@ auto DepositCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext
 	const D2RL::PluginContext* context = g_context;
 	const char*                args    = command->args != nullptr ? command->args : "";
 
+	// The read-only check: the same read the merge acts on, reported and thrown
+	// away. Nothing is consumed, so it can be asked as often as wanted.
+	if (MatchWord(args, "probe")) {
+		if (!ScheduleProbe(context)) {
+			ReportLine(context, command, "AutoDeposit: nothing was queued - no game to work in, or something else is already running.");
+			return D2RL::ConsoleCommandResult::Handled;
+		}
+		ReportLine(context, command, "AutoDeposit: bag probe queued on the game thread. What the counter reads lands in the log in a moment.");
+		return D2RL::ConsoleCommandResult::Handled;
+	}
+
 	if (MatchWord(args, "bag") || MatchWord(args, "merge")) {
 		if (!ScheduleMerge(context, false, 0)) {
 			ReportLine(context, command, "AutoDeposit: nothing was queued - no game to work in, or the bag merge is already running.");

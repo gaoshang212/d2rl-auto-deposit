@@ -148,4 +148,4 @@ cmake/deploy_dll.cmake    复制那一步
 external/d2r-pluginsdk    SDK,如果你在这放了一份(不进仓库)
 ```
 
-版本 0.1.1 · 作者 gaoshang212
+版本 0.1.2 · 作者 gaoshang212

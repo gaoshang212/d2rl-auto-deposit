@@ -172,4 +172,4 @@ cmake/deploy_dll.cmake    the copy step
 external/d2r-pluginsdk    the SDK, if you keep a checkout here (not committed)
 ```
 
-Version 0.1.1 · by gaoshang212
+Version 0.1.2 · by gaoshang212
