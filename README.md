@@ -73,8 +73,15 @@ your edits survive updates. **Read once, at startup - restart D2R after editing.
 ## Console
 
 * `deposit` (or `deposit stash`) - sweeps everything on the inventory grid into the advanced stash
-  at once. For the things lying around from before the plugin was loaded.
+  at once. For the things lying around from before the plugin was loaded. A sweep you typed answers
+  for every item it refuses, and the summary line names the codes it left standing.
 * `deposit bag` (or `deposit merge`) - sweeps every loose gem and cluster into the bag.
+* `deposit probe` - reads the Gem Bag's counter and logs it, consuming nothing.
+* `deposit why` - a read-only report: every unit on the grid with the container the SDK puts it in
+  and what the game answers about it, the units the walk sees and does not hand over, one line per
+  item code, and the walk's count of the grid beside the SDK's own count of it - so a walk that
+  misses something says so instead of looking like a game that refused an item. Reach for it when
+  something is not going in and the log says nothing about it.
 
 ## What is always left alone
 
@@ -146,9 +153,12 @@ fails to validate, nothing is consumed.
 
 The stash half has no SDK route at all - the SDK exposes no way to move an item into the advanced
 stash - so the game's own routines are called directly, by address, on the game thread. Sixteen
-addresses, each checked against its expected bytes as a set *before* anything is called. The class
-id that the game's "does this belong in the advanced stash" test takes is asked of the game for the
-item in hand, rather than assembled from a second enumeration and matched up.
+addresses, each checked against its expected bytes as a set *before* anything is called. A run
+starts from one walk of the player's item container, which is the belt, the equipped slots, the cube
+and every stash page as well as the inventory: the walk visits all of it and hands over the units
+standing on the grid, so nothing it does not hand over can be reached by anything that moves an
+item. The class id that the game's "does this belong in the advanced stash" test takes is asked of
+the game for the item in hand, rather than assembled from a second enumeration and matched up.
 
 A build whose bytes don't match loses the stash half and keeps the bag half, which needs none of
 it. Either way it is the feature that is lost, not the game.
@@ -160,6 +170,7 @@ src/deposit_plugin.cpp    the entry point - the three exports, and nothing else
 src/deposit_native.*      the addresses the stash half calls, and the calls
 src/deposit_stash.*       one deposit run, and the sweep the console asks for
 src/deposit_gem_bag.*     the bag transaction - SDK only, no address of its own
+src/deposit_report.*      'deposit why' - what the run can see, and moves nothing
 src/deposit_pickup.*      the pickup hook, and the queue that carries what it saw
 src/deposit_console.*     the 'deposit' command
 src/deposit_config.*      the config file, and the routing between the halves
@@ -172,4 +183,4 @@ cmake/deploy_dll.cmake    the copy step
 external/d2r-pluginsdk    the SDK, if you keep a checkout here (not committed)
 ```
 
-Version 0.1.2 · by gaoshang212
+Version 0.1.4 · by gaoshang212

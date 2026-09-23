@@ -5,6 +5,7 @@
 #include "deposit_common.h"
 #include "deposit_config.h"
 #include "deposit_gem_bag.h"
+#include "deposit_report.h"
 #include "deposit_stash.h"
 
 namespace {
@@ -54,8 +55,19 @@ auto DepositCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext
 		return D2RL::ConsoleCommandResult::Handled;
 	}
 
-	if (args[0] == 0 || MatchWord(args, "stash")) {
-		if (!ScheduleSweep(context)) {
+	// The read-only report. It answers the one question the run's own log cannot:
+	// where an item the run never mentioned actually is, and what the game answers
+	// about it. Nothing is moved, so it can be asked with the inventory as it is.
+	if (MatchWord(args, "why")) {
+		if (!ScheduleReport(context)) {
+			ReportLine(context, command, "AutoDeposit: nothing was queued - no game to work in, or a report is already running.");
+			return D2RL::ConsoleCommandResult::Handled;
+		}
+		ReportLine(context, command, "AutoDeposit: report queued on the game thread. It says which page and container every unit the player's container holds is on, and what the game answers about it; nothing is moved. The result lands in the log in a moment.");
+		return D2RL::ConsoleCommandResult::Handled;
+	}
+
+	if (args[0] == 0 || MatchWord(args, "stash")) {		if (!ScheduleSweep(context)) {
 			ReportLine(context, command, "AutoDeposit: nothing was queued - no game to work in, or a sweep is already running.");
 			return D2RL::ConsoleCommandResult::Handled;
 		}
@@ -65,6 +77,6 @@ auto DepositCommand(D2R::Game::Client* client, const D2RL::ConsoleCommandContext
 
 	ReportLine(context,
 	           command,
-	           "AutoDeposit: unknown command. 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges the loose gems into the Gem Bag. Both destinations are automatic on pickup.");
+	           "AutoDeposit: unknown command. 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges the loose gems into the Gem Bag, 'deposit probe' reads the Gem Bag's counter, 'deposit why' reports where everything in the player's container is and what the game answers about it. Both destinations are automatic on pickup.");
 	return D2RL::ConsoleCommandResult::Handled;
 }

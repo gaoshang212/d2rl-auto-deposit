@@ -33,6 +33,7 @@
 //   deposit_stash            one deposit run, and the sweep the console asks for
 //   deposit_gem_bag          the bag transaction. Reaches the game through the SDK
 //                            alone, so it survives a build the stash half cannot
+//   deposit_report           'deposit why': what the run can see and does not act on
 //   deposit_pickup           the pickup hook, and the queue carrying what it saw
 //   deposit_console          the 'deposit' command
 
@@ -53,7 +54,7 @@ constexpr D2RL::PluginInfo DepositPluginInfo {
 	.apiVersion  = D2RL_PLUGIN_API_VERSION,
 	.id          = "d2rl-auto-deposit",
 	.name        = "Auto Deposit",
-	.version     = "0.1.2",
+	.version     = "0.1.4",
 	.author      = "gaoshang212",
 	.description = "What you pick up goes where it belongs: gems into Reimagined's Gem Bag, everything the game counts as stash material into the advanced stash. Ignore lists in the config file.",
 	// NativeHooks is required for both halves. Items::editNativeItem is the only
@@ -79,7 +80,8 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 	char message[256] {};
 	std::snprintf(message,
 			sizeof(message),
-			"AutoDeposit: loaded. mod=%s build=%s exeBase=0x%llX",
+			"AutoDeposit: loaded. version=%s mod=%s build=%s exeBase=0x%llX",
+			DepositPluginInfo.version,
 			context->activeMod != nullptr ? context->activeMod : "(none)",
 			context->buildName != nullptr ? context->buildName : "?",
 			static_cast<unsigned long long>(context->exeBase));
@@ -95,7 +97,7 @@ D2RL_PLUGIN_EXPORT auto D2RLoaderLoadPlugin(const D2RL::PluginContext* context) 
 
 	if (!context->RegisterConsoleCommand("deposit",
 			DepositCommand,
-			"Auto Deposit: 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges loose gems into the Gem Bag. Both happen on their own as you pick things up. 'deposit probe' reads the Gem Bag's counter and logs it, changing nothing.")) {
+			"Auto Deposit: 'deposit' sweeps the inventory into the advanced stash, 'deposit bag' merges loose gems into the Gem Bag. Both happen on their own as you pick things up. 'deposit probe' reads the Gem Bag's counter and 'deposit why' reports where every unit in the player's container is, both changing nothing.")) {
 		context->LogError("AutoDeposit: failed to register the 'deposit' console command.");
 		return false;
 	}

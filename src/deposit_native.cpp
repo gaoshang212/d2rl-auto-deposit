@@ -108,6 +108,24 @@ __declspec(noinline) auto InspectItem(void* item, ItemFacts& out) noexcept -> bo
 	__try {
 		out.id   = static_cast<uint32_t>(At<UnitIntFn>(UnitIdRva)(item));
 		out.code = At<ItemCodeFn>(ItemCodeRva)(item);
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		out = ItemFacts {};
+		return false;
+	}
+}
+
+// The read-only twin of DepositNative: the same questions, asked in the same
+// order, with the two calls that move something left out - so an item the game
+// would refuse is reported as refused rather than as moved.
+__declspec(noinline) auto InspectAnswers(void* item, ItemAnswers& out) noexcept -> bool {
+	out = ItemAnswers {};
+	__try {
+		out.id             = static_cast<uint32_t>(At<UnitIntFn>(UnitIdRva)(item));
+		out.code           = At<ItemCodeFn>(ItemCodeRva)(item);
+		out.blocked        = At<UnitIntFn>(ItemBlockedRva)(item);
+		out.nativeClass    = At<TxtFileNoFn>(TxtFileNoRva)(item, __FILE__, __LINE__);
+		out.nativeMaterial = At<StashItemFn>(StashItemOkRva)(out.nativeClass) ? 1 : 0;
 
 		const auto* data = static_cast<const uint8_t*>(At<UnitFn>(ItemDataRva)(item));
 		if (data != nullptr) {
@@ -115,7 +133,15 @@ __declspec(noinline) auto InspectItem(void* item, ItemFacts& out) noexcept -> bo
 		}
 		return true;
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		out = ItemFacts {};
+		out = ItemAnswers {};
+		return false;
+	}
+}
+
+__declspec(noinline) auto IsMaterialClass(int classId) noexcept -> bool {
+	__try {
+		return At<StashItemFn>(StashItemOkRva)(classId);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		return false;
 	}
 }
@@ -161,6 +187,31 @@ __declspec(noinline) auto DepositNative(void* player, void* item) noexcept -> Ve
 	}
 }
 
+namespace {
+
+// Whether the unit stands on the inventory grid, which is the whole of what a run
+// acts on. The byte is the item's own and the read is the walk's: a unit whose
+// data cannot be read is not on the grid, because nothing that moves an item is
+// ever called for a question the game did not answer.
+//
+// Called inside the walk's guard, like everything else that reads an item.
+auto OnGrid(void* item) noexcept -> bool {
+	const auto* data = static_cast<const uint8_t*>(At<UnitFn>(ItemDataRva)(item));
+	return data != nullptr && data[ItemDataPageOffset] == MainInventoryPage;
+}
+
+}  // namespace
+
+// Every unit in the player's container is visited, and the ones on the grid are
+// handed over. Nothing here decides policy: what a unit is worth is a run's
+// question, and this only says where it stands.
+//
+// Visiting all of them is the point, and it is why the walk does not stop when
+// the table is full. The container is the belt, the equipped slots, the cube and
+// every stash page as well as the inventory, its list ends with the units that
+// arrived last, and those are the ones a pickup just put there. A walk that
+// stopped at MaxSnapshot stopped before reaching them, and the run it fed looked
+// at part of the grid while reporting as if it had seen all of it.
 __declspec(noinline) auto CollectInventory(Snapshot& out) noexcept -> bool {
 	out = Snapshot {};
 	__try {
@@ -175,13 +226,19 @@ __declspec(noinline) auto CollectInventory(Snapshot& out) noexcept -> bool {
 		out.player = player;
 
 		void* item = At<UnitFn>(FirstItemRva)(inventory);
-		while (item != nullptr && out.count < MaxSnapshot) {
+		while (item != nullptr) {
 			if (At<UnitIntFn>(UnitTypeRva)(item) == ItemUnitType && At<UnitFn>(ParentInventoryRva)(item) == inventory) {
 				const int id = At<UnitIntFn>(UnitIdRva)(item);
 				if (id >= 0) {
-					out.items[out.count] = item;
-					out.ids[out.count]   = static_cast<uint32_t>(id);
-					++out.count;
+					if (!OnGrid(item)) {
+						++out.elsewhere;
+					} else if (out.count < MaxSnapshot) {
+						out.items[out.count] = item;
+						out.ids[out.count]   = static_cast<uint32_t>(id);
+						++out.count;
+					} else {
+						++out.over;
+					}
 				}
 			}
 			item = At<UnitFn>(NextItemRva)(item);

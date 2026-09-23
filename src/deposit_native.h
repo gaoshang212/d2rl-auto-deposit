@@ -44,20 +44,47 @@ auto VerdictName(Verdict verdict) noexcept -> const char*;
 struct ItemFacts {
 	uint32_t id   = 0;
 	uint32_t code = 0;
-	uint8_t  page = 0;
 };
 
-// The value ItemFacts::page reads as for the inventory grid. Where in the data
-// block that byte sits is in the signature table - nothing outside
-// deposit_native.cpp reads it - so only the value it is compared against is
-// needed here.
+// The page the inventory grid reads as. Where in the data block that byte sits is
+// in the signature table - nothing outside deposit_native.cpp reads it - so only
+// the value it is compared against is needed here.
 //
-// Page 0 is the grid; the belt, the equipped slots and the stash pages hang off
-// the same container and read as other pages, so this is what keeps a run out of
-// everything that is not the grid.
+// Page 0 is the grid; the belt, the equipped slots, the cube and the stash pages
+// hang off the same container and read as other pages. It is the walk that tests
+// it, once per unit, before anything is handed over: that is what keeps a run out
+// of everything that is not the grid.
 inline constexpr uint8_t MainInventoryPage = 0;
 
 __declspec(noinline) auto InspectItem(void* item, ItemFacts& out) noexcept -> bool;
+
+// Everything the game answers about one item without moving it: what 'deposit
+// why' reports, and the questions a run asks before it decides anything.
+//
+// The two class ids are the point of it. TxtFileNo counts an item's class across
+// the game's item tables and the SDK reports the same number as
+// ItemInfo::classId, so a report that shows both is how a build where the two
+// disagree - the one way a run could answer "not advanced-stash material" for
+// everything - is told apart from an item the game really does refuse.
+struct ItemAnswers {
+	uint32_t id             = 0;
+	uint32_t code           = 0;
+	uint8_t  page           = 0;
+	int      blocked        = 0;  // ItemBlocked != 0: the game will not move it
+	int      nativeClass    = 0;  // TxtFileNo(item)
+	int      nativeMaterial = 0;  // StashItemOk(nativeClass)
+};
+
+// Read-only, and the only entry point here that is: it asks the same questions
+// the deposit path asks and calls nothing that moves anything, so the inventory
+// can be reported exactly as it stands. A fault comes back as false, with
+// nothing written.
+__declspec(noinline) auto InspectAnswers(void* item, ItemAnswers& out) noexcept -> bool;
+
+// Whether the game counts a class id - the number StashItemOk takes - among
+// advanced-stash materials. The report asks it with both ids, which is the
+// comparison ItemAnswers is built around.
+__declspec(noinline) auto IsMaterialClass(int classId) noexcept -> bool;
 
 // Whether the shared stash panel is open.
 //
@@ -89,20 +116,27 @@ __declspec(noinline) auto StashIsOpen() noexcept -> bool;
 // walk and passed in.
 __declspec(noinline) auto DepositNative(void* player, void* item) noexcept -> Verdict;
 
-// Everything the player's item container holds, gathered up front - which is
-// more than the inventory. The belt, the equipped slots and the stash pages hang
-// off the same container, and the page byte (read later, per item) is what tells
-// them apart. This walk does not filter on it: the run does, and it counts what
-// it left alone.
+// The grid's worth of the player's item container, gathered up front.
+//
+// The container is more than the inventory: the belt, the equipped slots, the
+// cube and every stash page hang off it, and how many units it may hold is the
+// mod's to decide, not this build's. The walk visits all of them and hands over
+// the ones on the grid, because the grid is what a run acts on. An inventory
+// stack is one unit whatever its size, so the grid's own slots are the real
+// ceiling and MaxSnapshot is headroom for them rather than a working limit.
+//
+// Filling up and stopping there instead was how the newest items in the
+// inventory became invisible to a run. The container's list has a tail, a pickup
+// lands on it, and a walk that stops when the table is full stops before it:
+// this character's stash pages and belt filled the table, and the runes picked
+// up afterwards were never reached. What the table holds is counted either way,
+// so a build that does run out says so rather than going quiet.
 //
 // Gathering first matters because StashDeposit moves the item it is given, and
 // walking a list while mutating it is how a plugin ends up holding a pointer to
 // something that has been relocated. With the list in hand, each item is a
 // separate unit and moving one does not invalidate the others - but the item
 // that was moved must never be read again, and nothing here does.
-//
-// An inventory stack is one unit whatever its size, so the grid's own slots are
-// the real ceiling and this is generous headroom rather than a working limit.
 constexpr size_t MaxSnapshot = 128;
 
 struct Snapshot {
@@ -110,9 +144,21 @@ struct Snapshot {
 	// run needs the player for every item it goes on to move, and asking again
 	// per item would be the same answer fetched N times.
 	void*    player = nullptr;
+
+	// The units on the grid, and only those.
 	void*    items[MaxSnapshot] {};
 	uint32_t ids[MaxSnapshot] {};
 	size_t   count = 0;
+
+	// The units the walk saw and did not hand over. `elsewhere` is the ordinary
+	// case and is what makes a run's summary complete: the belt, the equipped
+	// slots, the cube and the stash pages are in the same container, and nothing
+	// that moves an item is ever called for one of them. `over` is the one that
+	// must never happen - more grid units than the table can hold - and it is a
+	// count rather than a silent stop, because a run that quietly looks at part
+	// of the grid is the bug this shape exists to end.
+	size_t   over      = 0;
+	size_t   elsewhere = 0;
 };
 
 __declspec(noinline) auto CollectInventory(Snapshot& out) noexcept -> bool;

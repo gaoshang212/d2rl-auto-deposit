@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(D2RLAutoDepositPlugin VERSION 0.1.2 LANGUAGES CXX RC)
+project(D2RLAutoDepositPlugin VERSION 0.1.4 LANGUAGES CXX RC)
 
 # Where the plugin SDK comes from, in order of preference:
 #
@@ -55,7 +55,8 @@ endif()
 # Listed rather than globbed, so a file that stops being compiled is a decision
 # someone made and not something a rebuild noticed. One entry per module, in the
 # order the plugin reads them: the entry point, then the game-facing half, then
-# the bag, then the pickup that feeds both, then the console.
+# the bag, then the report that reads without acting, then the pickup that feeds
+# both, then the console.
 add_library(D2RLAutoDepositPlugin SHARED
 	src/deposit_plugin.cpp
 	src/deposit_plugin.rc
@@ -64,6 +65,7 @@ add_library(D2RLAutoDepositPlugin SHARED
 	src/deposit_native.cpp
 	src/deposit_stash.cpp
 	src/deposit_gem_bag.cpp
+	src/deposit_report.cpp
 	src/deposit_pickup.cpp
 	src/deposit_console.cpp
 )
